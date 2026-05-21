@@ -1,0 +1,19 @@
+# Build outputs
+bin/
+einsatzplaner
+
+# Generated Wails JS bindings (regenerated via: wails3 generate bindings -b -d frontend/bindings)
+frontend/bindings/
+
+# macOS
+.DS_Store
+
+# IDE / local tooling
+.vscode/
+.idea/
+.claude/
+
+# Sample/test data
+sample-*.json
+
+sample-2026.json

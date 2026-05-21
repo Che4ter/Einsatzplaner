@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 3,
+  "name": "Einsatzplaner",
+  "outputFilename": "einsatzplaner",
+  "info": {
+    "productName": "Einsatzplaner",
+    "productIdentifier": "wtf.42.einsatzplaner",
+    "description": "Einsatzplaner für Vereine, GZs und kleine Teams",
+    "version": "1.0.0"
+  }
+}

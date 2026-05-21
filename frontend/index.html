@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Einsatzplan</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Wails v3 runtime — injected by the asset server -->
+  <script src="/wails/runtime.js?v=20260519"></script>
+</head>
+<body>
+<div class="app">
+
+  <!-- ─── Sidebar ────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sb-head">
+      <div class="sb-brand" id="sidebar-team-name">Einsatzplan</div>
+      <div class="sb-sub" id="sidebar-year-label">Kein Jahr geladen</div>
+    </div>
+
+    <div class="sb-tools">
+      <button class="sb-tool" id="btn-new" title="Neues Jahr erstellen">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        Neu
+      </button>
+      <button class="sb-tool" id="btn-open" title="Datei öffnen">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        Öffnen
+      </button>
+      <button class="sb-tool" id="btn-save" title="Speichern" disabled>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        Sichern
+      </button>
+      <button class="sb-tool" id="btn-export" title="Kalender &amp; Druck exportieren">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export
+      </button>
+    </div>
+
+    <nav class="sb-nav">
+      <div class="sb-section" id="sb-section-planung">Planung</div>
+      <button class="month-row admin-row" data-page="year" id="nav-btn-year" disabled>
+        <span class="admin-ic">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        </span>
+        <span>Jahresübersicht</span>
+      </button>
+      <div class="month-list" id="nav-months">
+        <div style="padding: 8px 16px; font-size: 13px; color: var(--side-muted);">Keine Datei geöffnet</div>
+      </div>
+      <div class="sb-section" style="margin-top: 18px;">Verwaltung</div>
+      <button class="month-row admin-row" data-page="statistics" id="nav-btn-statistics" disabled>
+        <span class="admin-ic">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        </span>
+        <span>Statistiken</span>
+      </button>
+      <button class="month-row admin-row" data-page="verlauf" id="nav-btn-verlauf" disabled>
+        <span class="admin-ic">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
+        </span>
+        <span>Verlauf</span>
+      </button>
+      <button class="month-row admin-row" data-page="settings" id="nav-btn-settings" disabled>
+        <span class="admin-ic">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </span>
+        <span>Einstellungen</span>
+      </button>
+    </nav>
+
+    <div class="sb-foot">
+      <span id="sb-filename">—</span>
+      <span id="sb-version">v0.9</span>
+    </div>
+  </aside>
+
+  <!-- ─── Main ─────────────────────────────────────────────── -->
+  <div class="main">
+
+    <!-- Floating save pill (replaces topbar) -->
+    <div class="save-state" id="save-state">
+      <span class="dot"></span>
+      <span id="save-state-label">Kein Dokument</span>
+    </div>
+
+    <!-- Hidden legacy elements JS still references -->
+    <div id="unsaved-dot" style="display:none"></div>
+
+    <main class="content" id="content">
+
+      <!-- Welcome screen -->
+      <div id="page-welcome" class="page active">
+        <div class="welcome-screen">
+          <div class="welcome-logo">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          </div>
+          <div>
+            <h1 class="welcome-title">Einsatzplan</h1>
+            <p class="welcome-subtitle">Erstelle einen neuen Jahresplan oder öffne einen bestehenden.</p>
+          </div>
+          <div class="welcome-actions">
+            <button class="dlg-btn primary" id="btn-welcome-new">Neues Jahr erstellen</button>
+            <button class="dlg-btn secondary" id="btn-welcome-open">Datei öffnen</button>
+          </div>
+          <div id="welcome-reopen" style="display:none;max-width:380px;width:100%">
+            <div style="font-size:12px;color:var(--muted);margin-bottom:6px;text-align:left">Zuletzt geöffnet</div>
+            <div id="welcome-reopen-list" style="display:flex;flex-direction:column;gap:6px"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Month view — rendered by JS into #month-content -->
+      <div id="page-month" class="page">
+        <div id="month-content"></div>
+      </div>
+
+      <!-- Settings page — rendered by JS into #settings-content -->
+      <div id="page-settings" class="page">
+        <div id="settings-content"></div>
+      </div>
+
+      <!-- Statistics page — rendered by JS into #statistics-content -->
+      <div id="page-statistics" class="page">
+        <div id="statistics-content"></div>
+      </div>
+
+      <!-- Verlauf page -- rendered by JS into #verlauf-content -->
+      <div id="page-verlauf" class="page">
+        <div id="verlauf-content"></div>
+      </div>
+
+      <!-- Year overview page -- rendered by JS into #year-content -->
+      <div id="page-year" class="page">
+        <div id="year-content"></div>
+      </div>
+
+    </main>
+  </div>
+
+</div>
+
+<!-- ─── Modal: Export ─────────────────────────────────────── -->
+<div class="modal-backdrop hidden" id="modal-export">
+  <div class="modal" role="dialog" aria-modal="true" style="max-width:760px">
+    <div class="dlg-head export-dlg-head">
+      <div>
+        <div class="dlg-kicker">Einsatzplan teilen</div>
+        <div class="export-head-sub" id="export-head-sub">Export · —</div>
+        <div class="export-head-title">Kalender &amp; Druck</div>
+      </div>
+      <button class="dlg-close" id="btn-modal-export-close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="export-tabs-row" id="export-tabs-row">
+      <button class="export-tab active" data-action="export-tab" data-tab="ical">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        Kalender-Abo
+        <span class="export-tab-badge">.ics</span>
+      </button>
+      <button class="export-tab" data-action="export-tab" data-tab="pdf">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        PDF zum Drucken
+        <span class="export-tab-badge">A4</span>
+      </button>
+    </div>
+    <div class="export-body" id="export-body">
+      <!-- filled by JS -->
+    </div>
+    <div class="dlg-foot export-dlg-foot">
+      <div class="export-foot-filename" id="export-foot-filename">—</div>
+      <button class="dlg-btn secondary" id="btn-modal-export-cancel">Abbrechen</button>
+      <button class="dlg-btn primary" id="btn-export-confirm">…</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Modal: Einsatz ───────────────────────────────────── -->
+<div class="modal-backdrop hidden" id="modal-event">
+  <div class="modal" role="dialog" aria-modal="true" style="max-width:560px">
+    <div class="dlg-head">
+      <div>
+        <div class="dlg-kicker" id="modal-event-title">Einsatz hinzufügen</div>
+        <div class="dlg-date">
+          <span class="weekday" id="event-display-weekday"></span>
+          <span id="event-display-date"></span>
+        </div>
+      </div>
+      <button class="dlg-close" id="btn-modal-event-cancel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+
+    <!-- Date picker row — only for new events needing date input -->
+    <div id="event-date-row" style="display:none;padding:0 26px;border-bottom:1px solid var(--line)">
+      <div style="display:flex;gap:12px;padding:14px 0">
+        <div class="dlg-field" style="flex:1;margin:0">
+          <div class="dlg-label">Datum</div>
+          <input class="dlg-input" type="date" id="event-date-input">
+        </div>
+        <div class="dlg-field" id="event-date-end-group" style="flex:1;margin:0;display:none">
+          <div class="dlg-label">Bis <span class="hint">optional</span></div>
+          <input class="dlg-input" type="date" id="event-date-end-input">
+        </div>
+      </div>
+    </div>
+
+    <div class="dlg-body" id="event-fields">
+      <!-- Ort -->
+      <div class="dlg-field">
+        <div class="dlg-label">Ort</div>
+        <div class="loc-ac-wrap">
+          <input class="dlg-input" type="text" id="event-location" autocomplete="off" placeholder="Ort wählen oder eingeben…">
+          <ul class="loc-ac-drop hidden" id="event-location-drop" role="listbox"></ul>
+        </div>
+      </div>
+
+      <!-- Zeit -->
+      <div class="dlg-field">
+        <div class="dlg-label">Zeit</div>
+        <div class="dlg-presets" id="event-time-presets"></div>
+        <div class="time-pair">
+          <input class="dlg-input" type="time" id="event-time-from" style="width:110px;text-align:center;font-family:var(--font-mono)">
+          <span class="time-dash">–</span>
+          <input class="dlg-input" type="time" id="event-time-to" style="width:110px;text-align:center;font-family:var(--font-mono)">
+        </div>
+      </div>
+
+      <!-- Team -->
+      <div class="dlg-field">
+        <div class="dlg-label">Team</div>
+        <div class="team-head">
+          <div class="stepper">
+            <button type="button" id="btn-staff-dec">−</button>
+            <span class="stp-num" id="event-staff-display">2</span>
+            <button type="button" id="btn-staff-inc">+</button>
+          </div>
+          <input type="hidden" id="event-staff-required" value="2">
+          <span class="team-summary" id="event-staff-summary"></span>
+        </div>
+        <div class="staff-grid" id="event-staff-list"></div>
+      </div>
+
+      <!-- Notiz -->
+      <div class="dlg-field">
+        <div class="dlg-label">Notiz <span class="hint">optional</span></div>
+        <textarea class="dlg-input" id="event-comment" rows="3" placeholder="z.B. Noch 1 Person gesucht, Sonderprogramm…" style="resize:vertical"></textarea>
+      </div>
+    </div>
+
+    <div class="dlg-foot">
+      <div class="dlg-foot-left" id="event-closed-row">
+        <input type="checkbox" id="event-is-closed" style="position:absolute;opacity:0;pointer-events:none">
+        <label for="event-is-closed" class="dlg-link" id="event-closed-label">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="18"/></svg>
+          Keine Durchführung
+        </label>
+      </div>
+      <button class="dlg-btn danger" id="btn-modal-event-delete" style="display:none">Löschen</button>
+      <button class="dlg-btn secondary" id="btn-modal-event-cancel2">Abbrechen</button>
+      <button class="dlg-btn primary" id="btn-modal-event-confirm">Sichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Modal: Team member ──────────────────────────────── -->
+<div class="modal-backdrop hidden" id="modal-member">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="dlg-head">
+      <div>
+        <div class="dlg-kicker" id="modal-member-title">Person hinzufügen</div>
+        <div class="dlg-date" style="font-size:24px">Teammitglied</div>
+      </div>
+      <button class="dlg-close" id="btn-modal-member-cancel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="dlg-body">
+      <div class="dlg-field">
+        <div class="dlg-label">Name</div>
+        <input class="dlg-input" type="text" id="input-member-name" placeholder="z.B. Anna" autocomplete="off">
+      </div>
+      <div class="dlg-field">
+        <div class="dlg-label">Farbe</div>
+        <div class="color-picker" id="member-color-picker"></div>
+      </div>
+      <div class="dlg-field">
+        <div class="dlg-label">Notiz <span class="hint">optional</span></div>
+        <input class="dlg-input" type="text" id="input-member-notes" placeholder="z.B. nur Wochenende">
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <div class="dlg-foot-left"></div>
+      <button class="dlg-btn secondary" id="btn-modal-member-cancel2">Abbrechen</button>
+      <button class="dlg-btn primary" id="btn-modal-member-confirm">Speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Modal: Ort ───────────────────────────────────────── -->
+<div class="modal-backdrop hidden" id="modal-location">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="dlg-head">
+      <div>
+        <div class="dlg-kicker" id="modal-location-title">Ort hinzufügen</div>
+        <div class="dlg-date" style="font-size:24px">Standort</div>
+      </div>
+      <button class="dlg-close" id="btn-modal-location-cancel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="dlg-body">
+      <div class="dlg-field">
+        <div class="dlg-label">Name</div>
+        <input class="dlg-input" type="text" id="input-location-name" placeholder="z.B. Zürich HB">
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <div class="dlg-foot-left"></div>
+      <button class="dlg-btn secondary" id="btn-modal-location-cancel2">Abbrechen</button>
+      <button class="dlg-btn primary" id="btn-modal-location-confirm">Speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Modal: Standardzeit ──────────────────────────────── -->
+<div class="modal-backdrop hidden" id="modal-time">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="dlg-head">
+      <div>
+        <div class="dlg-kicker" id="modal-time-title">Standardzeit hinzufügen</div>
+        <div class="dlg-date" style="font-size:24px">Zeitvorlage</div>
+      </div>
+      <button class="dlg-close" id="btn-modal-time-cancel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="dlg-body">
+      <div class="dlg-field">
+        <div class="dlg-label">Bezeichnung <span class="hint">optional</span></div>
+        <input class="dlg-input" type="text" id="input-time-label" placeholder="z.B. Sommer, Wochenende">
+      </div>
+      <div style="display:flex;gap:12px">
+        <div class="dlg-field" style="flex:1">
+          <div class="dlg-label">Von</div>
+          <input class="dlg-input" type="time" id="input-time-from" value="13:30">
+        </div>
+        <div class="dlg-field" style="flex:1">
+          <div class="dlg-label">Bis</div>
+          <input class="dlg-input" type="time" id="input-time-to" value="17:30">
+        </div>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <div class="dlg-foot-left"></div>
+      <button class="dlg-btn secondary" id="btn-modal-time-cancel2">Abbrechen</button>
+      <button class="dlg-btn primary" id="btn-modal-time-confirm">Speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Modal: Neues Jahr ─────────────────────────────────── -->
+<div class="modal-backdrop hidden" id="modal-new-year">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="dlg-head">
+      <div>
+        <div class="dlg-kicker">Neues Dokument</div>
+        <div class="dlg-date" style="font-size:24px">Jahresplan erstellen</div>
+      </div>
+    </div>
+    <div class="dlg-body">
+      <div class="dlg-field">
+        <div class="dlg-label">Jahr</div>
+        <input class="dlg-input" type="number" id="input-new-year" min="2020" max="2099" value="2026">
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <div class="dlg-foot-left"></div>
+      <button class="dlg-btn secondary" id="btn-modal-new-cancel">Abbrechen</button>
+      <button class="dlg-btn primary" id="btn-modal-new-confirm">Erstellen &amp; Speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Toast container ───────────────────────────────────── -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- ─── Quick-assign popover (injected by JS) ─────────────── -->
+<div id="qa-popover" style="display:none"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

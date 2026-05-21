@@ -1,0 +1,32 @@
+version: '3'
+
+info:
+  companyName: "42.wtf"
+  productName: "Einsatzplaner"
+  productIdentifier: "wtf.42.einsatzplaner"
+  description: "Einsatzplaner für Vereine, GZs und kleine Teams"
+  copyright: "Copyright © 2026 42.wtf"
+  version: "1.0.0"
+
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - frontend
+      - bin
+      - build
+    file:
+      - .DS_Store
+    watched_extension:
+      - "*.go"
+    git_ignore: true
+  executes:
+    - cmd: wails3 generate bindings -b -d frontend/bindings
+      type: blocking
+    - cmd: go build -o bin/einsatzplaner .
+      type: blocking
+    - cmd: ./bin/einsatzplaner
+      type: primary
