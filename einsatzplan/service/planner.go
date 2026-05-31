@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -20,22 +21,24 @@ const maxRecentPaths = 3
 
 // PlannerService is the single Wails-bound service. All frontend calls go here.
 // It owns the in-memory plan and delegates persistence to the Store.
-// mu protects plan, path, and dirty which are accessed from multiple goroutines
+// mu protects plan, path, dirty, and loadedMtime which are accessed from multiple goroutines
 // (Wails IPC goroutines + the window-close event goroutine).
 type PlannerService struct {
-	mu      sync.RWMutex
-	app     *application.App
-	win     application.Window
-	store   storage.Store
-	plan    *domain.YearPlan
-	path    string
-	dirty   bool
-	version string
+	mu          sync.RWMutex
+	app         *application.App
+	win         *application.WebviewWindow
+	store       storage.Store
+	plan        *domain.YearPlan
+	path        string
+	dirty       bool
+	version     string
+	loadedMtime time.Time          // mtime of file when last loaded or saved
+	pollCancel  context.CancelFunc // stops the background file-change poller
 }
 
 // NewPlannerService constructs the service with the given dependencies.
 // Pass nil for app/win in tests.
-func NewPlannerService(app *application.App, win application.Window, store storage.Store) *PlannerService {
+func NewPlannerService(app *application.App, win *application.WebviewWindow, store storage.Store) *PlannerService {
 	return &PlannerService{app: app, win: win, store: store}
 }
 
@@ -50,16 +53,17 @@ func (s *PlannerService) GetVersion() string { return s.version }
 // CreatePlan initialises a blank plan for the given year and saves it via
 // a native Save-As dialog. Returns the new plan on success.
 func (s *PlannerService) CreatePlan(ctx context.Context, year int) (*domain.YearPlan, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	plan := storage.NewYearPlan(year)
-	path, err := s.saveAsDialog(fmt.Sprintf("einsatzplan-%d.json", year), plan)
+	// Show dialog without holding the mutex to avoid deadlock with the close-guard.
+	path, err := s.showSaveDialog(fmt.Sprintf("einsatzplan-%d.json", year), plan)
 	if err != nil {
 		return nil, err
 	}
 	if path == "" {
 		return nil, nil // user cancelled
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.plan = plan
 	return storage.CopyPlan(s.plan), nil
 }
@@ -92,33 +96,114 @@ func (s *PlannerService) ReopenPlan(ctx context.Context, path string) (*domain.Y
 }
 
 // SavePlan writes the current plan to its existing path.
+// Returns an error starting with "conflict:" if the file was modified externally
+// since it was last loaded or saved. Use ForceOverwriteSave to bypass.
 func (s *PlannerService) SavePlan(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.plan == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("no plan loaded")
+	}
+	if s.path != "" {
+		// Check whether the file was modified externally since we last loaded/saved.
+		if info, err := os.Stat(s.path); err == nil {
+			if info.ModTime().After(s.loadedMtime) {
+				s.mu.Unlock()
+				return fmt.Errorf("conflict: file was modified externally")
+			}
+		}
+		// Pre-date loadedMtime to close the poller race window between write and stat.
+		prevMtime := s.loadedMtime
+		s.loadedMtime = time.Now()
+		err := s.store.Save(s.path, s.plan)
+		if err == nil {
+			s.dirty = false
+			// Update to the exact OS mtime; fall back to pre-dated value on stat failure.
+			if info, err2 := os.Stat(s.path); err2 == nil {
+				s.loadedMtime = info.ModTime()
+			}
+		} else {
+			s.loadedMtime = prevMtime // restore on write failure
+		}
+		s.mu.Unlock()
+		return err
+	}
+	// No path yet — show Save-As dialog without holding the mutex.
+	planCopy := storage.CopyPlan(s.plan)
+	suggested := fmt.Sprintf("einsatzplan-%d.json", s.plan.Year)
+	s.mu.Unlock()
+	path, err := s.showSaveDialog(suggested, planCopy)
+	if err != nil || path == "" {
+		return err
+	}
+	s.mu.Lock()
+	s.path = path
+	s.dirty = false
+	if info, err2 := os.Stat(path); err2 == nil {
+		s.loadedMtime = info.ModTime()
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+// ForceOverwriteSave saves the plan unconditionally, bypassing the mtime check.
+// Called when the user explicitly confirms overwriting after a conflict.
+func (s *PlannerService) ForceOverwriteSave(ctx context.Context) error {
+	s.mu.Lock()
+	if s.plan == nil {
+		s.mu.Unlock()
 		return fmt.Errorf("no plan loaded")
 	}
 	if s.path == "" {
-		_, err := s.saveAsDialog(fmt.Sprintf("einsatzplan-%d.json", s.plan.Year), s.plan)
-		return err
+		s.mu.Unlock()
+		return fmt.Errorf("no path set")
 	}
-	if err := s.store.Save(s.path, s.plan); err != nil {
-		return err
+	// Pre-date loadedMtime to close the poller race window between write and stat.
+	prevMtime := s.loadedMtime
+	s.loadedMtime = time.Now()
+	err := s.store.Save(s.path, s.plan)
+	if err == nil {
+		s.dirty = false
+		if info, err2 := os.Stat(s.path); err2 == nil {
+			s.loadedMtime = info.ModTime()
+		}
+	} else {
+		s.loadedMtime = prevMtime // restore on write failure
 	}
-	s.dirty = false
-	return nil
+	s.mu.Unlock()
+	return err
 }
 
 // SavePlanAs opens a native Save-As dialog and writes the plan.
 // Returns the chosen path so the frontend can update its filename display.
 func (s *PlannerService) SavePlanAs(ctx context.Context) (string, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.plan == nil {
+		s.mu.Unlock()
 		return "", fmt.Errorf("no plan loaded")
 	}
+	planCopy := storage.CopyPlan(s.plan)
 	suggested := fmt.Sprintf("einsatzplan-%d.json", s.plan.Year)
-	return s.saveAsDialog(suggested, s.plan)
+	s.mu.Unlock()
+	path, err := s.showSaveDialog(suggested, planCopy)
+	if err != nil || path == "" {
+		return path, err
+	}
+	s.mu.Lock()
+	s.path = path
+	s.dirty = false
+	if info, err2 := os.Stat(path); err2 == nil {
+		s.loadedMtime = info.ModTime()
+	}
+	// Restart poller for the new path.
+	if s.pollCancel != nil {
+		s.pollCancel()
+	}
+	pollCtx, cancel := context.WithCancel(context.Background())
+	s.pollCancel = cancel
+	go s.startFilePoller(pollCtx, path)
+	s.mu.Unlock()
+	return path, nil
 }
 
 // GetCurrentFileName returns just the base filename of the currently open file,
@@ -202,7 +287,13 @@ func (s *PlannerService) GetYearStats(ctx context.Context, month int) domain.Yea
 	if s.plan == nil {
 		return domain.YearStats{}
 	}
-	return domain.CalcYearStats(s.eventsForFilter(month))
+	excluded := make(map[string]bool)
+	for _, m := range s.plan.Team {
+		if m.ExcludeFromHours {
+			excluded[m.ID] = true
+		}
+	}
+	return domain.CalcYearStats(s.eventsForFilter(month), s.plan.Settings.PrepTimeHours, excluded)
 }
 
 // GetPersonStats returns the per-person bar chart data.
@@ -212,7 +303,7 @@ func (s *PlannerService) GetPersonStats(ctx context.Context, month int) []domain
 	if s.plan == nil {
 		return []domain.PersonStat{}
 	}
-	return domain.CalcPersonStats(s.plan.Team, s.eventsForFilter(month))
+	return domain.CalcPersonStats(s.plan.Team, s.eventsForFilter(month), s.plan.Settings.PrepTimeHours)
 }
 
 // GetActivityLog returns the full activity log (newest first).
@@ -482,6 +573,22 @@ func (s *PlannerService) ToggleMemberActive(ctx context.Context, memberID string
 	return nil
 }
 
+// ToggleMemberExcludeHours flips the excludeFromHours flag for a team member.
+func (s *PlannerService) ToggleMemberExcludeHours(ctx context.Context, memberID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.requirePlan(); err != nil {
+		return err
+	}
+	idx := slices.IndexFunc(s.plan.Team, func(t domain.TeamMember) bool { return t.ID == memberID })
+	if idx < 0 {
+		return fmt.Errorf("member %q not found", memberID)
+	}
+	s.plan.Team[idx].ExcludeFromHours = !s.plan.Team[idx].ExcludeFromHours
+	s.markDirty()
+	return nil
+}
+
 // DeleteMember removes a team member by ID and scrubs their ID from every event's AssignedStaff.
 func (s *PlannerService) DeleteMember(ctx context.Context, memberID string) error {
 	s.mu.Lock()
@@ -547,8 +654,8 @@ func (s *PlannerService) markDirty() {
 
 // SetApp and SetWindow are called from main() after the Wails app is built.
 // They are NOT exposed as Wails bindings (no context.Context parameter).
-func (s *PlannerService) SetApp(app *application.App)      { s.app = app }
-func (s *PlannerService) SetWindow(win application.Window) { s.win = win }
+func (s *PlannerService) SetApp(app *application.App)              { s.app = app }
+func (s *PlannerService) SetWindow(win *application.WebviewWindow) { s.win = win }
 
 // IsDirtySync returns the dirty flag synchronously (for the close-guard hook).
 func (s *PlannerService) IsDirtySync() bool {
@@ -586,7 +693,7 @@ func (s *PlannerService) eventsForFilter(month int) []domain.Event {
 	return slices.Clone(s.plan.Months[month].Events)
 }
 
-func (s *PlannerService) loadFromPath(_ context.Context, path string) (*domain.YearPlan, error) {
+func (s *PlannerService) loadFromPath(ctx context.Context, path string) (*domain.YearPlan, error) {
 	plan, err := s.store.Load(path)
 	if err != nil {
 		return nil, err
@@ -594,11 +701,65 @@ func (s *PlannerService) loadFromPath(_ context.Context, path string) (*domain.Y
 	s.plan = plan
 	s.path = path
 	s.dirty = false
+	if info, err2 := os.Stat(path); err2 == nil {
+		s.loadedMtime = info.ModTime()
+	}
 	saveRecentPaths(prependUnique(loadRecentPaths(), path))
+	// Cancel any running poller and start a fresh one for the new path.
+	if s.pollCancel != nil {
+		s.pollCancel()
+	}
+	pollCtx, cancel := context.WithCancel(context.Background())
+	s.pollCancel = cancel
+	go s.startFilePoller(pollCtx, path)
 	return storage.CopyPlan(s.plan), nil
 }
 
-func (s *PlannerService) saveAsDialog(suggested string, plan *domain.YearPlan) (string, error) {
+// startFilePoller checks the file's mtime every 15 s and emits an event to
+// the frontend when it detects an external change.
+func (s *PlannerService) startFilePoller(ctx context.Context, path string) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	// lastNotified tracks the mtime we most recently emitted an event for,
+	// so we don't re-fire for the same external change on every tick.
+	var lastNotified time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			info, err := os.Stat(path)
+			if err != nil {
+				continue
+			}
+			s.mu.RLock()
+			known := s.loadedMtime
+			s.mu.RUnlock()
+			fileMtime := info.ModTime()
+			if fileMtime.After(known) && fileMtime.After(lastNotified) {
+				lastNotified = fileMtime
+				if s.win != nil {
+					s.win.EmitEvent("plan:file-changed-externally")
+				}
+			}
+		}
+	}
+}
+
+// ReloadPlan re-reads the current file from disk and returns the fresh plan.
+// Called by the frontend after the user confirms a reload.
+func (s *PlannerService) ReloadPlan(ctx context.Context) (*domain.YearPlan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.path == "" {
+		return nil, fmt.Errorf("no plan loaded")
+	}
+	return s.loadFromPath(ctx, s.path)
+}
+
+// showSaveDialog shows a native Save-As dialog and writes plan to the chosen path.
+// It does NOT hold or modify any mutex-protected state; callers handle that.
+func (s *PlannerService) showSaveDialog(suggested string, plan *domain.YearPlan) (string, error) {
 	if s.app == nil {
 		return "", fmt.Errorf("no app context")
 	}
@@ -618,8 +779,6 @@ func (s *PlannerService) saveAsDialog(suggested string, plan *domain.YearPlan) (
 	if err := s.store.Save(path, plan); err != nil {
 		return "", err
 	}
-	s.path = path
-	s.dirty = false
 	saveRecentPaths(prependUnique(loadRecentPaths(), path))
 	return path, nil
 }
@@ -696,22 +855,25 @@ func prependUnique(paths []string, path string) []string {
 //   - non-empty slice: only events where at least one of the given members is assigned
 //   - nil: all events regardless of assignment
 func (s *PlannerService) ExportICal(ctx context.Context, personIDs []string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Build the iCal content under the read-lock, then release before showing the dialog.
+	s.mu.RLock()
 	if err := s.requirePlan(); err != nil {
+		s.mu.RUnlock()
 		return err
 	}
 	if s.app == nil {
+		s.mu.RUnlock()
 		return fmt.Errorf("no app context")
 	}
-
 	allPersons := personIDs == nil
 	content := buildICal(s.plan, personIDs, allPersons)
+	year := s.plan.Year
+	s.mu.RUnlock()
 
 	sdlg := s.app.Dialog.SaveFile()
 	sdlg.SetOptions(&application.SaveFileDialogOptions{
 		Title:    "Kalender exportieren",
-		Filename: fmt.Sprintf("einsatzplan-%d.ics", s.plan.Year),
+		Filename: fmt.Sprintf("einsatzplan-%d.ics", year),
 	})
 	sdlg = sdlg.AddFilter("iCal Kalender", "*.ics")
 	if s.win != nil {

@@ -26,8 +26,12 @@ Built with Go + Wails v3. Single binary, no install, runs on Linux and Windows.
 ## Development
 
 ```bash
+# After cloning: fetch all dependencies (including the wails3 CLI tool)
+go mod tidy
+
 # Generate JS bindings (run once after Go service changes)
-wails3 generate bindings -b -d frontend/bindings
+# -b: use bundled runtime (/wails/runtime.js) instead of bare @wailsio/runtime specifier
+go run github.com/wailsapp/wails/v3/cmd/wails3 generate bindings -b
 
 # Build and run (frontend served live from disk)
 go build -o bin/einsatzplaner . && ./bin/einsatzplaner

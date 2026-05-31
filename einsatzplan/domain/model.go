@@ -4,12 +4,12 @@ import "time"
 
 // YearPlan is the root data structure — one file per calendar year.
 type YearPlan struct {
-	Version     int              `json:"version"`
-	Year        int              `json:"year"`
-	Settings    Settings         `json:"settings"`
-	Team        []TeamMember     `json:"team"`
-	Months      map[int]*Month   `json:"months"` // keys 1–12
-	ActivityLog []ActivityEntry  `json:"activityLog"`
+	Version     int             `json:"version"`
+	Year        int             `json:"year"`
+	Settings    Settings        `json:"settings"`
+	Team        []TeamMember    `json:"team"`
+	Months      map[int]*Month  `json:"months"` // keys 1–12
+	ActivityLog []ActivityEntry `json:"activityLog"`
 }
 
 type Month struct {
@@ -18,36 +18,42 @@ type Month struct {
 
 type Event struct {
 	ID            string   `json:"id"`
-	Type          string   `json:"type"`                    // "wednesday" | "weekday" | "weekend"
-	Date          string   `json:"date"`                    // YYYY-MM-DD
-	DateEnd       string   `json:"dateEnd,omitempty"`       // YYYY-MM-DD, only for multi-day
+	Type          string   `json:"type"`              // "wednesday" | "weekday" | "weekend"
+	Date          string   `json:"date"`              // YYYY-MM-DD
+	DateEnd       string   `json:"dateEnd,omitempty"` // YYYY-MM-DD, only for multi-day
 	IsClosed      bool     `json:"isClosed"`
 	Location      string   `json:"location"`
-	TimeFrom      string   `json:"timeFrom"`                // HH:MM
-	TimeTo        string   `json:"timeTo"`                  // HH:MM
+	TimeFrom      string   `json:"timeFrom"`               // HH:MM
+	TimeTo        string   `json:"timeTo"`                 // HH:MM
+	TimeSetup     string   `json:"timeSetup,omitempty"`    // HH:MM, Vorbereitung start
+	TimeTeardown  string   `json:"timeTeardown,omitempty"` // HH:MM, Nachbereitung end
 	StaffRequired int      `json:"staffRequired"`
 	AssignedStaff []string `json:"assignedStaff"` // team member IDs
 	Comment       string   `json:"comment,omitempty"`
 }
 
 type TeamMember struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Color  string `json:"color"` // hex, e.g. "#0d9488"
-	Active bool   `json:"active"`
-	Notes  string `json:"notes,omitempty"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Color            string `json:"color"` // hex, e.g. "#0d9488"
+	Active           bool   `json:"active"`
+	ExcludeFromHours bool   `json:"excludeFromHours,omitempty"` // if true, hours not counted in totals
 }
 
 type Settings struct {
 	TeamName     string       `json:"teamName"`
 	Locations    []string     `json:"locations"`
 	DefaultTimes []TimePreset `json:"defaultTimes"`
+	// PrepTimeHours kept for JSON backwards compatibility, no longer used in stats
+	PrepTimeHours float64 `json:"prepTimeHours,omitempty"`
 }
 
 type TimePreset struct {
-	Label string `json:"label"`
-	From  string `json:"from"` // HH:MM
-	To    string `json:"to"`   // HH:MM
+	Label        string `json:"label"`
+	From         string `json:"from"`                   // HH:MM
+	To           string `json:"to"`                     // HH:MM
+	TimeSetup    string `json:"timeSetup,omitempty"`    // HH:MM, Vorbereitung start
+	TimeTeardown string `json:"timeTeardown,omitempty"` // HH:MM, Nachbereitung end
 }
 
 type ActivityEntry struct {

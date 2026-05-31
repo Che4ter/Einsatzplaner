@@ -5,6 +5,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import * as Planner from './bindings/einsatzplaner/einsatzplan/service/plannerservice.js';
+import { Events } from '/wails/runtime.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,61 @@ const state = {
   monthPerson:  null,   // person id filter for month view
 };
 
+// ─── Autosave ────────────────────────────────────────────────────────────────
+const AUTOSAVE_DELAY_MS = 3000;
+let _autosaveTimer = null;
+let _autosavePaused = false; // paused when an external conflict is detected
+
+function isAutosaveEnabled() {
+  return localStorage.getItem('autosave') === 'true';
+}
+
+function setAutosave(enabled) {
+  localStorage.setItem('autosave', enabled ? 'true' : 'false');
+  if (!enabled && _autosaveTimer) {
+    clearTimeout(_autosaveTimer);
+    _autosaveTimer = null;
+  }
+}
+
+function scheduleAutosave() {
+  if (!isAutosaveEnabled() || !state.plan || _autosavePaused) return;
+  if (_autosaveTimer) clearTimeout(_autosaveTimer);
+  _autosaveTimer = setTimeout(async () => {
+    _autosaveTimer = null;
+    try {
+      await Planner.SavePlan();
+      setDirtyUI(false);
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes('conflict')) {
+        _autosavePaused = true;
+        const ok = await showConfirm({
+          kicker: 'Konflikt',
+          title: 'Datei wurde extern geändert',
+          message: 'Eine andere Person hat diese Datei gespeichert.<br>Trotzdem überschreiben?',
+          okLabel: 'Überschreiben',
+        });
+        if (ok) {
+          try {
+            await Planner.ForceOverwriteSave();
+            setDirtyUI(false);
+            hideExternalChangeBanner();
+            _autosavePaused = false;
+            showToast('Gespeichert (überschrieben).', 'success');
+          } catch (e2) {
+            showToast('Fehler beim Speichern: ' + e2, 'error');
+          }
+        } else {
+          showExternalChangeBanner(true);
+        }
+      } else {
+        showToast('Automatisches Speichern fehlgeschlagen.', 'error');
+      }
+    }
+  }, AUTOSAVE_DELAY_MS);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 3. PURE RENDER FUNCTIONS
 // Each function takes data as parameters and returns an HTML string.
@@ -45,6 +101,9 @@ const state = {
 
 function esc(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escNl(s) {
+  return esc(s).replace(/\n/g,'<br>');
 }
 
 function firstName(name) {
@@ -161,7 +220,7 @@ function renderMonthPage(plan, month, events, stats, filterPerson) {
       const on = filterPerson === m.id;
       return `<button class="filter-chip${on ? ' on' : ''}" style="--chip-color:${esc(m.color)}"
         data-action="month-person" data-id="${esc(m.id)}">
-        <span class="fc-dot"></span>${esc(firstName(m.name))}
+        <span class="fc-dot"></span>${esc(m.name)}
       </button>`;
     })
   ].join('');
@@ -355,7 +414,7 @@ function renderEventCard(ev, team, month) {
     if (!m) return '';
     return `<span class="chip" style="background:${esc(m.color)};border-color:${esc(m.color)};color:#fff">
       <span class="chip-dot" style="background:rgba(255,255,255,0.5)"></span>
-      ${esc(firstName(m.name))}
+      ${esc(m.name)}
     </span>`;
   }).join('');
 
@@ -365,13 +424,20 @@ function renderEventCard(ev, team, month) {
       data-event-id="${esc(ev.id)}" data-month="${month}">+ frei</button>`
   ).join('');
 
-  const timeStr = ev.timeFrom && ev.timeTo ? `${ev.timeFrom}–${ev.timeTo}` : '';
+  const SVG_RIGHT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h13M12 7l5 5-5 5"/></svg>`;
+  const SVG_LEFT  = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12H7M12 7l-5 5 5 5"/></svg>`;
+
+  const timeStr     = ev.timeFrom && ev.timeTo ? `${ev.timeFrom}–${ev.timeTo}` : '';
+  const setupStr    = ev.timeSetup    ? `<span class="ev-edge" title="Aufbau ab ${esc(ev.timeSetup)}">${SVG_RIGHT}${esc(ev.timeSetup)}</span>` : '';
+  const mainStr     = timeStr ? `<span class="ev-core">${esc(ev.timeFrom)}<span>–</span>${esc(ev.timeTo)}</span>` : '';
+  const teardownStr = ev.timeTeardown ? `<span class="ev-edge" title="Abbau bis ${esc(ev.timeTeardown)}">${SVG_LEFT}${esc(ev.timeTeardown)}</span>` : '';
+  const timeHtml    = [setupStr, mainStr, teardownStr].filter(Boolean).join('');
 
   return `
     <div class="ev-card ${tone}" data-action="edit-event" data-id="${esc(ev.id)}" data-month="${month}" style="cursor:pointer">
       <div class="ev-top">
         <div class="ev-loc">${esc(ev.location || '—')}</div>
-        <div class="ev-time">${esc(timeStr)}</div>
+        <div class="ev-times">${timeHtml}</div>
       </div>
       <div class="ev-meter">
         <div class="meter-text ${tone}">${assigned.length}/${need}</div>
@@ -380,7 +446,7 @@ function renderEventCard(ev, team, month) {
       <div class="ev-bottom">
         ${assignedChips}${emptySlots}
       </div>
-      ${ev.comment ? `<div class="ev-comment">${esc(ev.comment)}</div>` : ''}
+      ${ev.comment ? `<div class="ev-comment">${escNl(ev.comment)}</div>` : ''}
     </div>`;
 }
 
@@ -414,19 +480,29 @@ function renderStatisticsPage(plan, stats, personStats, filterMonth) {
       ).join('')}
     </div>`;
 
+  // Max hours across all people, used to scale the prep segment consistently.
+  const maxHrs = Math.max(1, ...personStats.map(p => p.hrs + (p.prepHrs ?? 0)));
   const barsHtml = personStats.map(p => {
-    const wkdPct = Math.round(p.wkd / maxTotal * 100);
-    const wkePct = Math.round(p.wke / maxTotal * 100);
+    const wkdPct  = Math.round(p.wkd / maxTotal * 100);
+    const wkePct  = Math.round(p.wke / maxTotal * 100);
+    const totalHrs = p.hrs + (p.prepHrs ?? 0);
+    const prepPct = Math.round((p.prepHrs ?? 0) / maxHrs * 100);
+    const wkdHrs  = Math.round(p.hrs * (p.wkd / (p.total || 1)));
+    const wkeHrs  = Math.round(p.hrs * (p.wke / (p.total || 1)));
+    const wkdTip  = esc(`${wkdHrs}h Wochentage`);
+    const wkeTip  = esc(`${wkeHrs}h Wochenende`);
+    const prepTip = esc(`${Math.round(p.prepHrs ?? 0)}h Vor-/Nachbearbeitung`);
     return `
       <div class="person-row${p.active ? '' : ' inactive'}">
-        <span class="person-name-chip" style="background:${esc(p.color)}">${esc(firstName(p.name))}</span>
+        <span class="person-name-chip" style="background:${esc(p.color)}">${esc(p.name)}</span>
         <div class="bar-track">
-          ${wkdPct > 0 ? `<div class="bar-seg" style="width:${wkdPct}%;background:${esc(p.color)}"></div>` : ''}
-          ${wkePct > 0 ? `<div class="bar-seg wke" style="width:${wkePct}%;background:${esc(p.color)}"></div>` : ''}
+          ${wkdPct > 0 ? `<div class="bar-seg has-tip" data-tip="${wkdTip}" style="width:${wkdPct}%;background:${esc(p.color)}"></div>` : ''}
+          ${wkePct > 0 ? `<div class="bar-seg wke has-tip" data-tip="${wkeTip}" style="width:${wkePct}%;background:${esc(p.color)}"></div>` : ''}
+          ${prepPct > 0 ? `<div class="bar-seg prep has-tip" data-tip="${prepTip}" style="width:${prepPct}%;background:${esc(p.color)}"></div>` : ''}
         </div>
         <div class="person-row-nums">
           <span>${p.total} <span class="sub">Einsätze</span></span>
-          <span>${Math.round(p.hrs)} <span class="sub">Std.</span></span>
+          <span>${Math.round(totalHrs)} <span class="sub">Std.</span></span>
         </div>
       </div>`;
   }).join('');
@@ -450,12 +526,12 @@ function renderStatisticsPage(plan, stats, personStats, filterMonth) {
         <div class="stat-card">
           <div class="stat-card-kicker">Einsätze</div>
           <div class="stat-card-num">${stats.totalEvents}</div>
-          <div class="stat-card-sub">${esc(evSub)}</div>
+          <div class="stat-card-sub">${esc(evSub)} · ${Math.round(stats.vorOrtHours)}h Mobilarbeit</div>
         </div>
         <div class="stat-card">
           <div class="stat-card-kicker">Stunden</div>
-          <div class="stat-card-num">${Math.round(stats.totalHours)}</div>
-          <div class="stat-card-sub">Gesamteinsatzzeit</div>
+          <div class="stat-card-num">${Math.round(stats.totalHours + stats.prepHours)}</div>
+          <div class="stat-card-sub">Gesamteinsatzzeit${stats.prepHours > 0 ? ` (davon ${Math.round(stats.prepHours)}h Vor-/Nachber.)` : ''}</div>
         </div>
         <div class="stat-card">
           <div class="stat-card-kicker">Abdeckung</div>
@@ -475,6 +551,7 @@ function renderStatisticsPage(plan, stats, personStats, filterMonth) {
         <div class="chart-legend">
           <span><span class="legend-swatch" style="background:var(--teal)"></span>Wochentag</span>
           <span><span class="legend-swatch" style="background:var(--teal);opacity:0.45"></span>Wochenende</span>
+          <span><span class="legend-swatch prep-swatch"></span>Vor-/Nachbereitung</span>
         </div>
         ${personStats.length === 0
           ? '<div class="empty-state" style="padding:32px 0"><div class="empty-state-text">Kein Teammitglied erfasst.</div></div>'
@@ -487,6 +564,7 @@ function renderStatisticsPage(plan, stats, personStats, filterMonth) {
 
 function renderSettingsPage(plan) {
   const { settings, team, year } = plan;
+  const autosaveChecked = isAutosaveEnabled() ? 'checked' : '';
 
   const locationRows = (settings.locations ?? []).map((loc, i) => `
     <div class="a-row">
@@ -497,29 +575,34 @@ function renderSettingsPage(plan) {
       </div>
     </div>`).join('');
 
-  const timeRows = (settings.defaultTimes ?? []).map((t, i) => `
+  const timeRows = (settings.defaultTimes ?? []).map((t, i) => {
+    const SVG_R = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h13M12 7l5 5-5 5"/></svg>`;
+    const SVG_L = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12H7M12 7l-5 5 5 5"/></svg>`;
+    const pre  = t.timeSetup    ? `<span class="ev-edge">${SVG_R}${esc(t.timeSetup)}</span>` : '';
+    const post = t.timeTeardown ? `<span class="ev-edge">${SVG_L}${esc(t.timeTeardown)}</span>` : '';
+    const mainT = `<span class="ev-core">${esc(t.from)}–${esc(t.to)}</span>`;
+    const sub = [pre, mainT, post].filter(Boolean).join('');
+    return `
     <div class="a-row">
       <div class="a-row-main">
         <div class="a-row-name">${esc(t.label || 'Standard')}</div>
-        <div class="a-row-sub">${esc(t.from)} – ${esc(t.to)}</div>
+        <div class="a-row-sub ev-times" style="font-size:12px">${sub}</div>
       </div>
       <div class="a-row-actions">
         <button class="a-row-btn" data-action="edit-time" data-index="${i}">Bearbeiten</button>
         <button class="a-row-btn danger" data-action="delete-time" data-index="${i}">Löschen</button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   const teamRows = team.map(m => `
     <div class="a-row team${m.active ? '' : ' inactive'}">
-      <span class="person-name-chip" style="background:${esc(m.color)}">${esc(firstName(m.name))}</span>
+      <span class="person-name-chip" style="background:${esc(m.color)}">${esc(m.name)}</span>
       <div class="a-row-main">
         ${!m.active ? '<span class="a-row-note">Inaktiv</span>' : ''}
+        ${m.excludeFromHours ? '<span class="a-row-note">Stunden ausgeschlossen</span>' : ''}
       </div>
       <div class="a-row-actions">
-        <button class="a-toggle${m.active ? ' on' : ''}" data-action="toggle-member" data-id="${esc(m.id)}">
-          <span style="width:6px;height:6px;border-radius:99px;background:${m.active ? 'var(--green)' : 'var(--muted-2)'}"></span>
-          ${m.active ? 'Aktiv' : 'Inaktiv'}
-        </button>
         <button class="a-row-btn" data-action="edit-member" data-id="${esc(m.id)}">Bearbeiten</button>
         <button class="a-row-btn danger" data-action="delete-member" data-id="${esc(m.id)}">Löschen</button>
       </div>
@@ -544,6 +627,16 @@ function renderSettingsPage(plan) {
             <div class="dlg-label">Teamname</div>
             <input class="dlg-input" type="text" id="settings-team-name"
               value="${esc(settings.teamName)}" placeholder="z.B. Mobile Spielanimation" data-action="save-team-name">
+          </div>
+          <div class="dlg-field" style="margin-top:16px;display:flex;align-items:center;justify-content:space-between">
+            <div>
+              <div class="dlg-label" style="margin-bottom:0">Automatisch speichern</div>
+              <div class="dlg-hint">Änderungen werden nach ${AUTOSAVE_DELAY_MS / 1000} Sekunden automatisch gespeichert.</div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settings-autosave" ${autosaveChecked} data-action="toggle-autosave">
+              <span class="toggle-track"></span>
+            </label>
           </div>
         </div>
       </div>
@@ -725,7 +818,7 @@ function renderActivityEntry(e, teamById, today) {
   const personChip = (id) => {
     const p = id ? teamById[id] : null;
     if (!p) return '';
-    return `<span class="act-person-chip" style="background:${esc(p.color)}"><span class="pc-dot"></span>${esc(firstName(p.name))}</span>`;
+    return `<span class="act-person-chip" style="background:${esc(p.color)}"><span class="pc-dot"></span>${esc(p.name)}</span>`;
   };
 
   // Target pill — navigates to the relevant month
@@ -844,7 +937,7 @@ function renderYearPage(plan, summaries, yearStats, closedCount, personStats, fi
       const on = filterPerson === m.id;
       return `<button class="filter-chip${on ? ' on' : ''}" style="--chip-color:${esc(m.color)}"
         data-action="year-person" data-id="${esc(m.id)}">
-        <span class="fc-dot"></span>${esc(firstName(m.name))}
+        <span class="fc-dot"></span>${esc(m.name)}
       </button>`;
     })
   ].join('');
@@ -917,7 +1010,7 @@ function renderYearPage(plan, summaries, yearStats, closedCount, personStats, fi
           <div class="stat-label">Wochenenden</div>
         </div>
         <div class="stat">
-          <div class="stat-num">${Math.round(ps.hrs)}<span class="stat-num-unit">h</span></div>
+          <div class="stat-num">${Math.round(ps.hrs + (ps.prepHrs ?? 0))}<span class="stat-num-unit">h</span></div>
           <div class="stat-label">Stunden</div>
         </div>
       </div>
@@ -941,7 +1034,7 @@ function renderYearPage(plan, summaries, yearStats, closedCount, personStats, fi
           <div class="stat-label">Abdeckung</div>
         </div>
         <div class="stat">
-          <div class="stat-num">${Math.round(yearStats.totalHours)}</div>
+          <div class="stat-num">${Math.round(yearStats.totalHours + yearStats.prepHours)}</div>
           <div class="stat-label">Stunden</div>
         </div>
         <div class="stat">
@@ -1011,7 +1104,7 @@ function renderYearPage(plan, summaries, yearStats, closedCount, personStats, fi
               <div class="yr-closed-ic">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </div>
-              <span>${esc(e.comment || 'Keine Durchführung')}</span>
+              <span>${escNl(e.comment || 'Keine Durchführung')}</span>
             </div>
           </div>
         </div>`;
@@ -1026,7 +1119,7 @@ function renderYearPage(plan, summaries, yearStats, closedCount, personStats, fi
       const people = assigned.map(id => activeTeam.find(m => m.id === id)).filter(Boolean);
       const chipHtml = people.map(p => {
         const outline = filterPerson === p.id ? `outline:2px solid var(--ink);outline-offset:1px;` : '';
-        return `<span class="yr-chip" title="${esc(p.name)}" style="background:${esc(p.color)};${outline}">${esc(firstName(p.name).slice(0,1))}</span>`;
+        return `<span class="yr-chip" title="${esc(p.name)}" style="background:${esc(p.color)};${outline}"><span class="yr-chip-dot"></span>${esc(p.name)}</span>`;
       }).join('') +
       Array.from({length: missing}, () => `<span class="yr-chip empty">+</span>`).join('') +
       (need > 0 ? `<span class="yr-meter-text ${tone}">${assigned.length}/${need}</span>` : '');
@@ -1040,15 +1133,19 @@ function renderYearPage(plan, summaries, yearStats, closedCount, personStats, fi
           <div class="yr-event ${tone}${matchesFilter ? '' : ' dim'}" data-action="toggle-yr-event" data-id="${esc(e.id)}" data-month="${m}">
             <div class="yr-ev-main">
               <span class="yr-ev-loc">${esc(e.location || '—')}</span>
-              ${e.timeFrom && e.timeTo ? `<span class="yr-ev-time">${esc(e.timeFrom)}–${esc(e.timeTo)}</span>` : ''}
+              ${(e.timeFrom && e.timeTo) ? `<span class="yr-ev-times">
+                ${e.timeSetup ? `<span class="ev-edge" title="Aufbau ab ${esc(e.timeSetup)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h13M12 7l5 5-5 5"/></svg>${esc(e.timeSetup)}</span>` : ''}
+                <span class="ev-core">${esc(e.timeFrom)}<span>–</span>${esc(e.timeTo)}</span>
+                ${e.timeTeardown ? `<span class="ev-edge" title="Abbau bis ${esc(e.timeTeardown)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12H7M12 7l-5 5 5 5"/></svg>${esc(e.timeTeardown)}</span>` : ''}
+              </span>` : ''}
               ${isWeekend ? `<span class="yr-ev-tag">WE</span>` : ''}
             </div>
             <div class="yr-ev-chips">${chipHtml}</div>
             <div class="yr-ev-detail">
-              ${e.comment ? `<div class="yr-ev-detail-comment">${esc(e.comment)}</div>` : ''}
+              ${e.comment ? `<div class="yr-ev-detail-comment">${escNl(e.comment)}</div>` : ''}
               <div class="yr-ev-detail-row">
                 ${people.length > 0 ? `<div class="yr-ev-detail-people">${people.map(p =>
-                  `<span class="yr-ev-detail-chip" style="background:${esc(p.color)}">${esc(firstName(p.name))}</span>`
+                  `<span class="yr-ev-detail-chip" style="background:${esc(p.color)}">${esc(p.name)}</span>`
                 ).join('')}</div>` : ''}
                 ${isWeekend && e.dateEnd ? `<div class="yr-ev-detail-meta">bis ${esc(formatDate(e.dateEnd))}</div>` : ''}
                 <button class="yr-ev-edit-btn" data-action="edit-event" data-id="${esc(e.id)}" data-month="${m}">Bearbeiten</button>
@@ -1113,7 +1210,7 @@ function renderQAPopover(team, assignedStaff, eventId, month) {
     return `<button class="qa-item${on ? ' assigned' : ''}"
       data-action="qa-toggle" data-event-id="${esc(eventId)}" data-month="${month}" data-id="${esc(m.id)}">
       <span class="qa-dot" style="background:${esc(m.color)}"></span>
-      <span class="qa-name">${esc(firstName(m.name))}</span>
+      <span class="qa-name">${esc(m.name)}</span>
       ${on ? '<span class="qa-mark">zugeteilt</span>' : ''}
     </button>`;
   }).join('');
@@ -1144,6 +1241,7 @@ function setDirtyUI(isDirty) {
   if (label) label.textContent = isDirty ? 'Ungespeichert' : 'Gespeichert';
   const btnSave = document.getElementById('btn-save');
   if (btnSave) btnSave.disabled = !isDirty;
+  if (isDirty) scheduleAutosave();
 }
 
 function refreshSidebar() {
@@ -1168,7 +1266,7 @@ async function onPlanLoaded(plan) {
   document.getElementById('sidebar-year-label').textContent = `Einsatzplan · ${plan.year}`;
   document.title = `Einsatzplan ${plan.year}`;
   document.getElementById('sb-filename').textContent = plan.year;
-  document.getElementById('save-state-label').textContent = 'Gespeichert';
+  setDirtyUI(false);
   Planner.GetCurrentFileName().then(name => {
     if (name) document.getElementById('sb-filename').textContent = name;
   }).catch(() => {});
@@ -1272,9 +1370,32 @@ async function cmdSave() {
   try {
     await Planner.SavePlan();
     setDirtyUI(false);
+    hideExternalChangeBanner();
+    _autosavePaused = false;
     showToast('Gespeichert.', 'success');
   } catch (e) {
-    showToast('Fehler beim Speichern: ' + e, 'error');
+    const msg = String(e);
+    if (msg.includes('conflict')) {
+      const ok = await showConfirm({
+        kicker: 'Konflikt',
+        title: 'Datei wurde extern geändert',
+        message: 'Eine andere Person hat diese Datei gespeichert.<br>Trotzdem überschreiben?',
+        okLabel: 'Überschreiben',
+      });
+      if (ok) {
+        try {
+          await Planner.ForceOverwriteSave();
+          setDirtyUI(false);
+          hideExternalChangeBanner();
+          _autosavePaused = false;
+          showToast('Gespeichert (überschrieben).', 'success');
+        } catch (e2) {
+          showToast('Fehler beim Speichern: ' + e2, 'error');
+        }
+      }
+    } else {
+      showToast('Fehler beim Speichern: ' + e, 'error');
+    }
   }
 }
 
@@ -1317,6 +1438,8 @@ async function openAddEvent(type, date, month) {
   document.getElementById('event-location').value    = '';
   document.getElementById('event-time-from').value   = '';
   document.getElementById('event-time-to').value     = '';
+  document.getElementById('event-time-setup').value    = '';
+  document.getElementById('event-time-teardown').value = '';
   document.getElementById('event-staff-required').value = '2';
   document.getElementById('event-staff-display').textContent = '2';
   document.getElementById('event-comment').value     = '';
@@ -1352,6 +1475,8 @@ async function openEditEvent(eventId, month) {
   document.getElementById('event-location').value   = ev.location   ?? '';
   document.getElementById('event-time-from').value  = ev.timeFrom   ?? '';
   document.getElementById('event-time-to').value    = ev.timeTo     ?? '';
+  document.getElementById('event-time-setup').value    = ev.timeSetup    ?? '';
+  document.getElementById('event-time-teardown').value = ev.timeTeardown ?? '';
   const need = ev.staffRequired ?? 0;
   document.getElementById('event-staff-required').value = need;
   document.getElementById('event-staff-display').textContent = need;
@@ -1368,8 +1493,10 @@ async function openEditEvent(eventId, month) {
 async function confirmEventModal() {
   const isClosed  = document.getElementById('event-is-closed').checked;
   const location  = document.getElementById('event-location').value.trim();
-  const timeFrom  = document.getElementById('event-time-from').value;
-  const timeTo    = document.getElementById('event-time-to').value;
+  const timeFrom     = document.getElementById('event-time-from').value;
+  const timeTo       = document.getElementById('event-time-to').value;
+  const timeSetup    = document.getElementById('event-time-setup').value    || '';
+  const timeTeardown = document.getElementById('event-time-teardown').value || '';
   const need      = parseInt(document.getElementById('event-staff-required').value, 10) || 0;
   const comment   = document.getElementById('event-comment').value.trim();
   const date      = _eventDate || document.getElementById('event-date-input').value;
@@ -1391,6 +1518,8 @@ async function confirmEventModal() {
     location:      isClosed ? '' : location,
     timeFrom:      isClosed ? '' : timeFrom,
     timeTo:        isClosed ? '' : timeTo,
+    timeSetup:     isClosed ? '' : timeSetup,
+    timeTeardown:  isClosed ? '' : timeTeardown,
     staffRequired: isClosed ? 0 : need,
     assignedStaff: isClosed ? [] : assignedStaff,
     comment:       comment,
@@ -1481,7 +1610,9 @@ function openAddMember() {
   _memberColor  = TEAM_COLORS[state.plan.team.length % TEAM_COLORS.length];
   document.getElementById('modal-member-title').textContent = 'Person hinzufügen';
   document.getElementById('input-member-name').value  = '';
-  document.getElementById('input-member-notes').value = '';
+  document.getElementById('input-member-exclude-hours').checked = false;
+  document.getElementById('input-member-active').checked = true;
+  document.getElementById('modal-member-active-row').style.display = 'none';
   renderColorPicker(state.plan.team);
   showModal('modal-member');
 }
@@ -1493,24 +1624,27 @@ function openEditMember(id) {
   _memberColor  = m.color;
   document.getElementById('modal-member-title').textContent = 'Person bearbeiten';
   document.getElementById('input-member-name').value  = m.name;
-  document.getElementById('input-member-notes').value = m.notes ?? '';
+  document.getElementById('input-member-exclude-hours').checked = !!m.excludeFromHours;
+  document.getElementById('input-member-active').checked = !!m.active;
+  document.getElementById('modal-member-active-row').style.display = 'flex';
   renderColorPicker(state.plan.team);
   showModal('modal-member');
 }
 
 async function confirmMemberModal() {
   const name  = document.getElementById('input-member-name').value.trim();
-  const notes = document.getElementById('input-member-notes').value.trim();
   if (!name) {
     document.getElementById('input-member-name').style.borderColor = 'var(--rose)';
     return;
   }
   try {
+    const excludeFromHours = document.getElementById('input-member-exclude-hours').checked;
+    const active = _memberEditId ? document.getElementById('input-member-active').checked : true;
     if (_memberEditId) {
       const m = state.plan.team.find(t => t.id === _memberEditId);
-      await Planner.UpdateMember({ ...m, name, color: _memberColor, notes });
+      await Planner.UpdateMember({ ...m, name, color: _memberColor, excludeFromHours, active });
     } else {
-      await Planner.CreateMember({ id: '', name, color: _memberColor, active: true, notes });
+      await Planner.CreateMember({ id: '', name, color: _memberColor, active: true, excludeFromHours });
     }
     state.plan = await Planner.GetPlan();
     closeModal('modal-member');
@@ -1600,9 +1734,11 @@ let _timeEditIndex = -1;
 function openAddTime() {
   _timeEditIndex = -1;
   document.getElementById('modal-time-title').textContent = 'Standardzeit hinzufügen';
-  document.getElementById('input-time-label').value = '';
-  document.getElementById('input-time-from').value  = '13:30';
-  document.getElementById('input-time-to').value    = '17:30';
+  document.getElementById('input-time-label').value    = '';
+  document.getElementById('input-time-from').value     = '13:30';
+  document.getElementById('input-time-to').value       = '17:30';
+  document.getElementById('input-time-setup').value    = '';
+  document.getElementById('input-time-teardown').value = '';
   showModal('modal-time');
 }
 
@@ -1610,18 +1746,23 @@ function openEditTime(index) {
   _timeEditIndex = index;
   const t = state.plan.settings.defaultTimes[index];
   document.getElementById('modal-time-title').textContent = 'Standardzeit bearbeiten';
-  document.getElementById('input-time-label').value = t?.label ?? '';
-  document.getElementById('input-time-from').value  = t?.from  ?? '13:30';
-  document.getElementById('input-time-to').value    = t?.to    ?? '17:30';
+  document.getElementById('input-time-label').value    = t?.label        ?? '';
+  document.getElementById('input-time-from').value     = t?.from         ?? '13:30';
+  document.getElementById('input-time-to').value       = t?.to           ?? '17:30';
+  document.getElementById('input-time-setup').value    = t?.timeSetup    ?? '';
+  document.getElementById('input-time-teardown').value = t?.timeTeardown ?? '';
   showModal('modal-time');
 }
 
 async function confirmTimeModal() {
-  const label = document.getElementById('input-time-label').value.trim();
-  const from  = document.getElementById('input-time-from').value;
-  const to    = document.getElementById('input-time-to').value;
+  const label        = document.getElementById('input-time-label').value.trim();
+  const from         = document.getElementById('input-time-from').value;
+  const to           = document.getElementById('input-time-to').value;
+  const timeSetup    = document.getElementById('input-time-setup').value    || '';
+  const timeTeardown = document.getElementById('input-time-teardown').value || '';
   const times = [...(state.plan.settings.defaultTimes ?? [])];
-  const entry = { label: label || 'Standard', from, to };
+  const entry = { label: label || 'Standard', from, to, ...(timeSetup    && { timeSetup }),
+                                                          ...(timeTeardown && { timeTeardown }) };
   if (_timeEditIndex >= 0) times[_timeEditIndex] = entry;
   else times.push(entry);
   const s = { ...state.plan.settings, defaultTimes: times };
@@ -1748,7 +1889,7 @@ function renderExportModal() {
         data-action="export-person-toggle" data-id="${esc(m.id)}"
         style="--chip-c:${esc(m.color)}">
         <span class="ep-dot" style="background:${esc(m.color)}"></span>
-        ${esc(firstName(m.name))}
+        ${esc(m.name)}
       </button>`;
     }).join('');
 
@@ -1890,10 +2031,10 @@ function doExportPDF() {
 
       const names = (ev.assignedStaff ?? []).map(id => {
         const mb = teamByID[id];
-        return mb ? `<span class="p-chip"><span class="p-dot" style="background:${esc(mb.color)}"></span>${esc(firstName(mb.name))}</span>` : '';
+        return mb ? `<span class="p-chip"><span class="p-dot" style="background:${esc(mb.color)}"></span>${esc(mb.name)}</span>` : '';
       }).join('');
       const noteRow = ev.comment
-        ? `<tr class="p-note-row"><td colspan="4" class="p-note-cell">${esc(ev.comment)}</td></tr>`
+        ? `<tr class="p-note-row"><td colspan="4" class="p-note-cell">${escNl(ev.comment)}</td></tr>`
         : '';
       return `<tr>
         <td class="p-date">${dayStr}</td>
@@ -2021,6 +2162,25 @@ function closeModal(id) {
   document.getElementById(id)?.classList.add('hidden');
 }
 
+// Shows a styled confirm dialog. Returns a Promise<boolean>.
+let _confirmResolve = null;
+function showConfirm({ kicker = '', title = '', message = '', okLabel = 'OK' } = {}) {
+  document.getElementById('modal-confirm-kicker').textContent = kicker;
+  document.getElementById('modal-confirm-title').textContent = title;
+  document.getElementById('modal-confirm-msg').innerHTML = message;
+  document.getElementById('btn-modal-confirm-ok').textContent = okLabel;
+  showModal('modal-confirm');
+  return new Promise(resolve => { _confirmResolve = resolve; });
+}
+document.getElementById('btn-modal-confirm-ok')?.addEventListener('click', () => {
+  closeModal('modal-confirm');
+  if (_confirmResolve) { _confirmResolve(true); _confirmResolve = null; }
+});
+document.getElementById('btn-modal-confirm-cancel')?.addEventListener('click', () => {
+  closeModal('modal-confirm');
+  if (_confirmResolve) { _confirmResolve(false); _confirmResolve = null; }
+});
+
 // ── Form helpers ──────────────────────────────────────────────────────────────
 
 function populateLocationDatalist(locations) {
@@ -2107,18 +2267,26 @@ function wireLocationAC() {
 function populateTimePresets(times) {
   const el = document.getElementById('event-time-presets');
   if (!el) return;
-  el.innerHTML = times.map((t, i) =>
-    `<button type="button" class="preset" data-action="time-preset" data-index="${i}">
-      ${esc(t.label || 'Standard')}<span class="preset-time">${esc(t.from)}–${esc(t.to)}</span>
-    </button>`
-  ).join('');
+  el.innerHTML = times.map((t, i) => {
+    const SVG_R = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h13M12 7l5 5-5 5"/></svg>`;
+    const SVG_L = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12H7M12 7l-5 5 5 5"/></svg>`;
+    const pre  = t.timeSetup    ? `<span class="ev-edge">${SVG_R}${esc(t.timeSetup)}</span>` : '';
+    const post = t.timeTeardown ? `<span class="ev-edge">${SVG_L}${esc(t.timeTeardown)}</span>` : '';
+    const mainTime = `<span class="ev-core">${esc(t.from)}–${esc(t.to)}</span>`;
+    const sub = [pre, mainTime, post].filter(Boolean).join('');
+    return `<button type="button" class="preset" data-action="time-preset" data-index="${i}">
+      <span>${esc(t.label || 'Standard')}</span><span class="preset-time ev-times" style="margin-top:2px">${sub}</span>
+    </button>`;
+  }).join('');
 }
 
 function applyTimePreset(index) {
   const t = state.plan?.settings?.defaultTimes?.[index];
   if (!t) return;
-  document.getElementById('event-time-from').value = t.from;
-  document.getElementById('event-time-to').value   = t.to;
+  document.getElementById('event-time-from').value     = t.from     ?? '';
+  document.getElementById('event-time-to').value       = t.to       ?? '';
+  document.getElementById('event-time-setup').value    = t.timeSetup    ?? '';
+  document.getElementById('event-time-teardown').value = t.timeTeardown ?? '';
 }
 
 function populateStaffList(team, assigned) {
@@ -2133,7 +2301,7 @@ function populateStaffList(team, assigned) {
       data-color="${esc(m.color)}"
       style="${on ? `background:${esc(m.color)}` : `border-color:${esc(m.color)}`}">
       <span class="sp-dot" style="background:${on ? 'rgba(255,255,255,0.7)' : esc(m.color)}"></span>
-      ${esc(firstName(m.name))}
+      ${esc(m.name)}
     </button>`;
   }).join('');
   updateStaffSummary();
@@ -2296,7 +2464,6 @@ document.addEventListener('click', e => {
     case 'edit-time':       openEditTime(Number(index));     break;
     case 'delete-time':     deleteTime(Number(index));       break;
     case 'add-time':        openAddTime();                   break;
-    case 'toggle-member':   toggleMemberActive(id);          break;
     case 'edit-member':     openEditMember(id);              break;
     case 'delete-member':   deleteMember(id);                break;
     case 'add-member':      openAddMember();                 break;
@@ -2334,10 +2501,93 @@ document.getElementById('event-is-closed')?.addEventListener('change', e => {
   document.getElementById('event-closed-label').classList.toggle('is-closed', e.target.checked);
 });
 
+// ─── External change handling ────────────────────────────────────────────────
+
+function showExternalChangeBanner(hasDirty) {
+  const banner = document.getElementById('external-change-banner');
+  const msg    = document.getElementById('external-change-msg');
+  if (!banner || !msg) return;
+  if (hasDirty) {
+    msg.textContent = 'Eine andere Person hat diese Datei geändert. Neu laden verwirft deine ungespeicherten Änderungen.';
+  } else {
+    msg.textContent = 'Eine andere Person hat diese Datei geändert.';
+  }
+  banner.style.display = 'flex';
+}
+
+function hideExternalChangeBanner() {
+  const banner = document.getElementById('external-change-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+// Re-renders whichever page is currently visible without changing the active page.
+async function refreshCurrentPage() {
+  switch (state.currentPage) {
+    case 'month':      await navigateToMonth(state.currentMonth); break;
+    case 'statistics': await showStatisticsPage(); break;
+    case 'settings':   await showSettingsPage(); break;
+    case 'verlauf':    await showVerlaufPage(); break;
+    case 'year':       await showYearPage(); break;
+    default:           await onPlanLoaded(state.plan); break;
+  }
+}
+
+async function handleExternalChange() {
+  if (!state.plan) return;
+  const isDirty = document.getElementById('save-state')?.classList.contains('dirty') ?? false;
+  if (!isDirty) {
+    // No unsaved changes — reload silently and stay on current page.
+    try {
+      const plan = await Planner.ReloadPlan();
+      if (!plan) return;
+      // Update state and sidebar metadata without navigating away.
+      state.plan = plan;
+      const teamName = plan.settings?.teamName;
+      document.getElementById('sidebar-team-name').textContent = teamName || 'Einsatzplan';
+      document.getElementById('sidebar-year-label').textContent = `Einsatzplan · ${plan.year}`;
+      document.title = `Einsatzplan ${plan.year}`;
+      setDirtyUI(false);
+      await refreshCurrentPage();
+      hideExternalChangeBanner();
+      showToast('Ansicht aktualisiert.', 'success');
+    } catch (e) {
+      showToast('Fehler beim Aktualisieren: ' + e, 'error');
+    }
+  } else {
+    // Has unsaved changes — warn and let the user decide.
+    _autosavePaused = true;
+    showExternalChangeBanner(true);
+  }
+}
+
+// Register Wails event listener for file-change notifications from the poller.
+Events.On('plan:file-changed-externally', handleExternalChange);
+
 // Toolbar buttons
 document.getElementById('btn-new')?.addEventListener('click', cmdNew);
 document.getElementById('btn-open')?.addEventListener('click', cmdOpen);
 document.getElementById('btn-save')?.addEventListener('click', cmdSave);
+
+// Banner buttons
+document.getElementById('btn-reload-plan')?.addEventListener('click', async () => {
+  hideExternalChangeBanner();
+  _autosavePaused = false;
+  try {
+    const plan = await Planner.ReloadPlan();
+    if (!plan) return;
+    state.plan = plan;
+    const teamName = plan.settings?.teamName;
+    document.getElementById('sidebar-team-name').textContent = teamName || 'Einsatzplan';
+    document.getElementById('sidebar-year-label').textContent = `Einsatzplan · ${plan.year}`;
+    document.title = `Einsatzplan ${plan.year}`;
+    setDirtyUI(false);
+    await refreshCurrentPage();
+    showToast('Ansicht aktualisiert.', 'success');
+  } catch (e) {
+    showToast('Fehler beim Neu laden: ' + e, 'error');
+  }
+});
+document.getElementById('btn-dismiss-banner')?.addEventListener('click', hideExternalChangeBanner);
 document.getElementById('btn-welcome-new')?.addEventListener('click', cmdNew);
 document.getElementById('btn-welcome-open')?.addEventListener('click', cmdOpen);
 
@@ -2392,16 +2642,60 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// Team name — delegated change listener (avoids accumulating listeners on each
-// page navigation).
+// Delegated change listeners (avoids accumulating listeners on each page navigation).
 document.addEventListener('change', e => {
   const el = e.target.closest('[data-action]');
-  if (!el || el.dataset.action !== 'save-team-name') return;
-  const s = { ...state.plan.settings, teamName: el.value };
-  Planner.UpdateSettings(s)
-    .then(() => { state.plan.settings.teamName = el.value; setDirtyUI(true); })
-    .catch(err => showToast('Fehler: ' + err, 'error'));
+  if (!el) return;
+
+  if (el.dataset.action === 'save-team-name') {
+    const s = { ...state.plan.settings, teamName: el.value };
+    Planner.UpdateSettings(s)
+      .then(() => { state.plan.settings.teamName = el.value; setDirtyUI(true); })
+      .catch(err => showToast('Fehler: ' + err, 'error'));
+    return;
+  }
+
+  if (el.dataset.action === 'toggle-autosave') {
+    setAutosave(el.checked);
+    return;
+  }
 });
+
+// ── Global tooltip ────────────────────────────────────────────────────────────
+{
+  const tip = document.getElementById('app-tooltip');
+  let hideTimer;
+
+  document.addEventListener('mouseover', e => {
+    const el = e.target.closest('.has-tip');
+    if (!el) return;
+    clearTimeout(hideTimer);
+    tip.textContent = el.dataset.tip ?? '';
+    tip.classList.add('visible');
+    positionTip(e);
+  });
+  document.addEventListener('mousemove', e => {
+    if (e.target.closest('.has-tip')) positionTip(e);
+  });
+  document.addEventListener('mouseout', e => {
+    if (!e.target.closest('.has-tip')) return;
+    hideTimer = setTimeout(() => tip.classList.remove('visible'), 80);
+  });
+
+  function positionTip(e) {
+    const GAP = 10;
+    tip.style.left = '0';
+    tip.style.top  = '0';
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let x = e.clientX - tw / 2;
+    let y = e.clientY - th - GAP;
+    if (x < 6) x = 6;
+    if (x + tw > window.innerWidth - 6) x = window.innerWidth - tw - 6;
+    if (y < 6) y = e.clientY + GAP;
+    tip.style.left = x + 'px';
+    tip.style.top  = y + 'px';
+  }
+}
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 

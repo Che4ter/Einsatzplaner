@@ -14,7 +14,9 @@ type MonthSummary struct {
 // YearStats is the four-card summary shown at the top of the statistics page.
 type YearStats struct {
 	TotalEvents   int     `json:"totalEvents"`
-	TotalHours    float64 `json:"totalHours"` // person-hours (duration × staff × days)
+	TotalHours    float64 `json:"totalHours"`  // person-hours (duration × staff × days)
+	VorOrtHours   float64 `json:"vorOrtHours"` // event hours (duration × days, regardless of staff)
+	PrepHours     float64 `json:"prepHours"`   // total Vor- & Nachbearbeitungszeit (prepTime × staff)
 	TotalNeed     int     `json:"totalNeed"`
 	TotalAssigned int     `json:"totalAssigned"`
 	CoveragePct   int     `json:"coveragePct"`
@@ -23,14 +25,15 @@ type YearStats struct {
 
 // PersonStat is one row in the per-person bar chart.
 type PersonStat struct {
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Color  string  `json:"color"`
-	Active bool    `json:"active"`
-	Wkd    int     `json:"wkd"`   // weekday event count
-	Wke    int     `json:"wke"`   // weekend day count (2 for Sa+So)
-	Total  int     `json:"total"` // Wkd + Wke
-	Hrs    float64 `json:"hrs"`   // total person-hours
+	ID      string  `json:"id"`
+	Name    string  `json:"name"`
+	Color   string  `json:"color"`
+	Active  bool    `json:"active"`
+	Wkd     int     `json:"wkd"`     // weekday event count
+	Wke     int     `json:"wke"`     // weekend day count (2 for Sa+So)
+	Total   int     `json:"total"`   // Wkd + Wke
+	Hrs     float64 `json:"hrs"`     // total person-hours (excl. prep)
+	PrepHrs float64 `json:"prepHrs"` // Vor- & Nachbearbeitungszeit
 }
 
 // CoverageClass returns "ok", "warn", or "danger" for display.
@@ -75,7 +78,7 @@ func CalcAllMonthSummaries(plan *YearPlan) map[int]MonthSummary {
 
 // CalcYearStats computes the four headline numbers from a set of events.
 // Pass a filtered slice (e.g. one month or all months, already excluding closed).
-func CalcYearStats(events []Event) YearStats {
+func CalcYearStats(events []Event, _ float64, excludedIDs map[string]bool) YearStats {
 	var s YearStats
 	for _, e := range events {
 		if e.IsClosed {
@@ -87,7 +90,14 @@ func CalcYearStats(events []Event) YearStats {
 		s.TotalAssigned += assigned
 		days := e.EventDays()
 		dur := parseDuration(e.TimeFrom, e.TimeTo)
-		s.TotalHours += dur * float64(assigned) * float64(days)
+		s.VorOrtHours += dur * float64(days)
+		prepTime := parseDuration(e.TimeSetup, e.TimeFrom) + parseDuration(e.TimeTo, e.TimeTeardown)
+		for _, id := range e.AssignedStaff {
+			if !excludedIDs[id] {
+				s.TotalHours += dur * float64(days)
+				s.PrepHours += prepTime
+			}
+		}
 		if assigned < e.StaffRequired {
 			s.UnderCount++
 		}
@@ -101,7 +111,7 @@ func CalcYearStats(events []Event) YearStats {
 }
 
 // CalcPersonStats builds the per-person bar chart data, sorted by total (desc).
-func CalcPersonStats(team []TeamMember, events []Event) []PersonStat {
+func CalcPersonStats(team []TeamMember, events []Event, _ float64) []PersonStat {
 	idx := make(map[string]*PersonStat, len(team))
 	out := make([]PersonStat, len(team))
 	for i, m := range team {
@@ -115,6 +125,7 @@ func CalcPersonStats(team []TeamMember, events []Event) []PersonStat {
 		}
 		days := e.EventDays()
 		dur := parseDuration(e.TimeFrom, e.TimeTo)
+		prepTime := parseDuration(e.TimeSetup, e.TimeFrom) + parseDuration(e.TimeTo, e.TimeTeardown)
 		for _, id := range e.AssignedStaff {
 			p, ok := idx[id]
 			if !ok {
@@ -126,6 +137,7 @@ func CalcPersonStats(team []TeamMember, events []Event) []PersonStat {
 				p.Wke += days
 			}
 			p.Hrs += dur * float64(days)
+			p.PrepHrs += prepTime
 		}
 	}
 

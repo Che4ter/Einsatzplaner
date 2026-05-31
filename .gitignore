@@ -2,6 +2,9 @@
 bin/
 einsatzplaner
 
+# Go vendor directory
+vendor/
+
 # Generated Wails JS bindings (regenerated via: wails3 generate bindings -b -d frontend/bindings)
 frontend/bindings/
 
@@ -17,3 +20,4 @@ frontend/bindings/
 sample-*.json
 
 sample-2026.json
+.xlsx

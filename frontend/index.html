@@ -87,6 +87,13 @@
     <!-- Hidden legacy elements JS still references -->
     <div id="unsaved-dot" style="display:none"></div>
 
+    <!-- External-change warning banner (hidden until needed) -->
+    <div id="external-change-banner" class="ext-change-banner" style="display:none">
+      <span id="external-change-msg"></span>
+      <button id="btn-reload-plan" class="ext-change-reload">Neu laden</button>
+      <button id="btn-dismiss-banner" class="ext-change-dismiss">✕</button>
+    </div>
+
     <main class="content" id="content">
 
       <!-- Welcome screen -->
@@ -225,6 +232,16 @@
           <span class="time-dash">–</span>
           <input class="dlg-input" type="time" id="event-time-to" style="width:110px;text-align:center;font-family:var(--font-mono)">
         </div>
+        <div class="prep-time-row">
+          <div class="prep-time-field">
+            <label class="prep-time-label"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;vertical-align:middle"><path d="M4 12h13M12 7l5 5-5 5"/></svg> Vorbereitung</span> <span class="hint">optional</span></label>
+            <input class="dlg-input" type="time" id="event-time-setup" placeholder="--:--">
+          </div>
+          <div class="prep-time-field">
+            <label class="prep-time-label"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;vertical-align:middle"><path d="M20 12H7M12 7l-5 5 5 5"/></svg> Nachbereitung</span> <span class="hint">optional</span></label>
+            <input class="dlg-input" type="time" id="event-time-teardown" placeholder="--:--">
+          </div>
+        </div>
       </div>
 
       <!-- Team -->
@@ -285,9 +302,19 @@
         <div class="dlg-label">Farbe</div>
         <div class="color-picker" id="member-color-picker"></div>
       </div>
-      <div class="dlg-field">
-        <div class="dlg-label">Notiz <span class="hint">optional</span></div>
-        <input class="dlg-input" type="text" id="input-member-notes" placeholder="z.B. nur Wochenende">
+      <div class="dlg-field" style="display:flex;align-items:center;justify-content:space-between">
+        <div class="dlg-label" style="margin-bottom:0">Stunden aus Total ausschliessen</div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="input-member-exclude-hours">
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+      <div class="dlg-field" id="modal-member-active-row" style="display:flex;align-items:center;justify-content:space-between">
+        <div class="dlg-label" style="margin-bottom:0">Person ist aktiv</div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="input-member-active">
+          <span class="toggle-track"></span>
+        </label>
       </div>
     </div>
     <div class="dlg-foot">
@@ -351,6 +378,16 @@
           <input class="dlg-input" type="time" id="input-time-to" value="17:30">
         </div>
       </div>
+      <div style="display:flex;gap:12px">
+        <div class="dlg-field" style="flex:1">
+          <div class="dlg-label"><span style="display:inline-flex;align-items:center;gap:5px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;flex-shrink:0"><path d="M4 12h13M12 7l5 5-5 5"/></svg>Vorbereitung</span><span class="hint">optional</span></div>
+          <input class="dlg-input" type="time" id="input-time-setup" placeholder="--:--">
+        </div>
+        <div class="dlg-field" style="flex:1">
+          <div class="dlg-label"><span style="display:inline-flex;align-items:center;gap:5px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;flex-shrink:0"><path d="M20 12H7M12 7l-5 5 5 5"/></svg>Nachbereitung</span><span class="hint">optional</span></div>
+          <input class="dlg-input" type="time" id="input-time-teardown" placeholder="--:--">
+        </div>
+      </div>
     </div>
     <div class="dlg-foot">
       <div class="dlg-foot-left"></div>
@@ -361,6 +398,25 @@
 </div>
 
 <!-- ─── Modal: Neues Jahr ─────────────────────────────────── -->
+<div class="modal-backdrop hidden" id="modal-confirm">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="dlg-head">
+      <div>
+        <div class="dlg-kicker" id="modal-confirm-kicker"></div>
+        <div class="dlg-date" style="font-size:20px" id="modal-confirm-title"></div>
+      </div>
+    </div>
+    <div class="dlg-body">
+      <p id="modal-confirm-msg" style="margin:0;line-height:1.5"></p>
+    </div>
+    <div class="dlg-foot">
+      <div class="dlg-foot-left"></div>
+      <button class="dlg-btn secondary" id="btn-modal-confirm-cancel">Abbrechen</button>
+      <button class="dlg-btn danger" id="btn-modal-confirm-ok"></button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop hidden" id="modal-new-year">
   <div class="modal" role="dialog" aria-modal="true">
     <div class="dlg-head">
@@ -388,6 +444,9 @@
 
 <!-- ─── Quick-assign popover (injected by JS) ─────────────── -->
 <div id="qa-popover" style="display:none"></div>
+
+<!-- ─── Global tooltip ───────────────────────────────────── -->
+<div id="app-tooltip" class="app-tooltip"></div>
 
 <script type="module" src="app.js"></script>
 </body>
