@@ -74,6 +74,55 @@ func (s *PlannerService) CreatePlan(ctx context.Context, year int) (*domain.Year
 	return storage.CopyPlan(s.plan), nil
 }
 
+// PickTemplateFile shows a native open-file dialog restricted to JSON files and
+// returns the selected path, or an empty string if the user cancels.
+func (s *PlannerService) PickTemplateFile(ctx context.Context) (string, error) {
+	if s.app == nil {
+		return "", fmt.Errorf("no app context")
+	}
+	dlg := s.app.Dialog.OpenFile().
+		SetTitle("Vorlage auswählen").
+		AddFilter("Einsatzplan (JSON)", "*.json")
+	if s.win != nil {
+		dlg = dlg.AttachToWindow(s.win)
+	}
+	return dlg.PromptForSingleSelection()
+}
+
+// CreatePlanFromTemplate creates a blank plan for year but pre-fills Settings
+// and Team from the JSON file at templatePath. The user is then prompted for a
+// save location via a native Save-As dialog.
+func (s *PlannerService) CreatePlanFromTemplate(ctx context.Context, year int, templatePath string) (*domain.YearPlan, error) {
+	tmpl, err := s.store.Load(templatePath)
+	if err != nil {
+		return nil, fmt.Errorf("Vorlage laden: %w", err)
+	}
+
+	plan := storage.NewYearPlan(year)
+	plan.Settings = tmpl.Settings
+	// Deep-copy team slice so we don't share memory with the template.
+	plan.Team = make([]domain.TeamMember, len(tmpl.Team))
+	copy(plan.Team, tmpl.Team)
+
+	path, err := s.showSaveDialog(fmt.Sprintf("einsatzplan-%d.json", year), plan)
+	if err != nil {
+		return nil, err
+	}
+	if path == "" {
+		return nil, nil // user cancelled
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.plan = plan
+	s.path = path
+	s.dirty = false
+	if info, err2 := os.Stat(path); err2 == nil {
+		s.loadedMtime = info.ModTime()
+	}
+	s.restartPoller(path)
+	return storage.CopyPlan(s.plan), nil
+}
+
 // OpenPlan shows a native open dialog, loads and returns the plan.
 func (s *PlannerService) OpenPlan(ctx context.Context) (*domain.YearPlan, error) {
 	if s.app == nil {
@@ -264,7 +313,7 @@ func (s *PlannerService) AddRecentPath(_ context.Context, path string) {
 func (s *PlannerService) GetMonthEvents(ctx context.Context, month int) []domain.Event {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.plan == nil || month < 1 || month > 12 {
+	if s.plan == nil || month < 1 || month > 12 || s.plan.Months[month] == nil {
 		return []domain.Event{}
 	}
 	return slices.Clone(s.plan.Months[month].Events)
@@ -371,13 +420,6 @@ func (s *PlannerService) UpdateEvent(ctx context.Context, month int, ev domain.E
 	}
 	s.plan.Months[month].Events[idx] = ev
 
-	// Log the most notable field change.
-	entry := domain.ActivityEntry{
-		ID:     generateID(),
-		At:     timestamp(),
-		Action: domain.ActionEdit,
-		Target: targetFrom(month, ev),
-	}
 	// Collect per-person assign/unassign entries when the staff list changed via
 	// the edit dialog (mirrors what ToggleStaff logs for individual toggles).
 	oldStaff := slices.Clone(old.AssignedStaff)
@@ -405,52 +447,62 @@ func (s *PlannerService) UpdateEvent(ctx context.Context, month int, ev domain.E
 			})
 		}
 	}
+	for _, e := range staffEntries {
+		appendActivity(s.plan, e)
+	}
 
-	switch {
-	case old.IsClosed != ev.IsClosed:
+	newEditEntry := func() domain.ActivityEntry {
+		return domain.ActivityEntry{
+			ID:     generateID(),
+			At:     timestamp(),
+			Action: domain.ActionEdit,
+			Target: targetFrom(month, ev),
+		}
+	}
+
+	// A close/reopen transition is logged as a single dedicated entry; closed
+	// events carry no scheduling data, so other field diffs are not logged.
+	if old.IsClosed != ev.IsClosed {
+		entry := newEditEntry()
 		if ev.IsClosed {
 			entry.Action = domain.ActionClose
 			entry.Reason = ev.Comment
 		} else {
 			entry.Action = domain.ActionReopen
 		}
-	case old.Location != ev.Location:
-		entry.Field = "location"
-		entry.From = old.Location
-		entry.To = ev.Location
-	case old.TimeFrom != ev.TimeFrom || old.TimeTo != ev.TimeTo:
-		entry.Field = "time"
-		entry.From = old.TimeFrom + "–" + old.TimeTo
-		entry.To = ev.TimeFrom + "–" + ev.TimeTo
-	case old.Date != ev.Date:
-		entry.Field = "date"
-		entry.From = old.Date
-		entry.To = ev.Date
-	case old.DateEnd != ev.DateEnd:
-		entry.Field = "dateEnd"
-		entry.From = old.DateEnd
-		entry.To = ev.DateEnd
-	case old.StaffRequired != ev.StaffRequired:
-		entry.Field = "staffRequired"
-		entry.From = fmt.Sprintf("%d", old.StaffRequired)
-		entry.To = fmt.Sprintf("%d", ev.StaffRequired)
-	case old.Comment != ev.Comment:
-		entry.Field = "comment"
-		entry.From = old.Comment
-		entry.To = ev.Comment
-	case old.Type != ev.Type:
-		entry.Field = "type"
-		entry.From = old.Type
-		entry.To = ev.Type
-	}
-
-	fieldChanged := entry.Field != "" || entry.Action == domain.ActionClose || entry.Action == domain.ActionReopen
-
-	for _, e := range staffEntries {
-		appendActivity(s.plan, e)
-	}
-	if fieldChanged {
 		appendActivity(s.plan, entry)
+		s.markDirty()
+		return nil
+	}
+
+	// Otherwise log one entry per changed field, in a stable order.
+	addFieldEntry := func(field, from, to string) {
+		entry := newEditEntry()
+		entry.Field = field
+		entry.From = from
+		entry.To = to
+		appendActivity(s.plan, entry)
+	}
+	if old.Type != ev.Type {
+		addFieldEntry("type", old.Type, ev.Type)
+	}
+	if old.Date != ev.Date {
+		addFieldEntry("date", old.Date, ev.Date)
+	}
+	if old.DateEnd != ev.DateEnd {
+		addFieldEntry("dateEnd", old.DateEnd, ev.DateEnd)
+	}
+	if old.Location != ev.Location {
+		addFieldEntry("location", old.Location, ev.Location)
+	}
+	if old.TimeFrom != ev.TimeFrom || old.TimeTo != ev.TimeTo {
+		addFieldEntry("time", old.TimeFrom+"–"+old.TimeTo, ev.TimeFrom+"–"+ev.TimeTo)
+	}
+	if old.StaffRequired != ev.StaffRequired {
+		addFieldEntry("staffRequired", fmt.Sprintf("%d", old.StaffRequired), fmt.Sprintf("%d", ev.StaffRequired))
+	}
+	if old.Comment != ev.Comment {
+		addFieldEntry("comment", old.Comment, ev.Comment)
 	}
 	s.markDirty()
 	return nil

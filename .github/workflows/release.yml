@@ -9,7 +9,30 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run Go tests
+        run: go test ./einsatzplan/...
+
+      - name: Run Go vet
+        run: go vet ./einsatzplan/...
+
+      - name: Run frontend unit tests
+        run: node --test 'frontend/_tests/*.test.js'
+
   build-linux:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,12 +58,20 @@ jobs:
       - name: Build
         run: go build -tags production -ldflags="-w -s -X main.Version=${{ github.ref_name }}" -o bin/einsatzplaner .
 
+      - name: Verify tests are not embedded in the binary
+        run: |
+          if grep -qa "node:test" bin/einsatzplaner; then
+            echo "::error::Frontend test files were embedded in the binary"
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: einsatzplaner-linux
           path: bin/einsatzplaner
 
   build-windows:
+    needs: test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

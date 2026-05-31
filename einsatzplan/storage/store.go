@@ -11,6 +11,10 @@ import (
 
 const fileVersion = 1
 
+// defaultTeamColor is applied to team members whose stored color is missing or
+// not a valid CSS hex color, preventing CSS injection via hand-edited files.
+const defaultTeamColor = "#0d9488"
+
 // Store is the persistence abstraction. The real implementation writes JSON to
 // disk; tests can inject MemStore for zero I/O.
 type Store interface {
@@ -126,6 +130,14 @@ func normalise(plan *domain.YearPlan) {
 	}
 	if plan.Team == nil {
 		plan.Team = []domain.TeamMember{}
+	}
+	// Sanitize team colors loaded from disk: an invalid value (e.g. a crafted
+	// CSS payload in a hand-edited file) is reset to a safe default before it
+	// can be interpolated into a style attribute in the frontend.
+	for i := range plan.Team {
+		if !domain.IsValidHexColor(plan.Team[i].Color) {
+			plan.Team[i].Color = defaultTeamColor
+		}
 	}
 	if plan.ActivityLog == nil {
 		plan.ActivityLog = []domain.ActivityEntry{}

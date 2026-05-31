@@ -8,6 +8,18 @@ import (
 	"einsatzplaner/einsatzplan/domain"
 )
 
+// localTZID returns the host's IANA timezone identifier (e.g. "Europe/Zurich").
+// time.Local.String() can return the non-IANA placeholder "Local" when the host
+// timezone cannot be resolved to a named zone; in that case we fall back to "UTC"
+// so the emitted TZID is always a value calendar clients can interpret.
+func localTZID() string {
+	name := time.Local.String()
+	if name == "" || name == "Local" {
+		return "UTC"
+	}
+	return name
+}
+
 // buildICal produces an iCalendar (RFC 5545) string for the given plan.
 //
 // personIDs controls filtering:
@@ -26,7 +38,7 @@ func buildICal(plan *domain.YearPlan, personIDs []string, allPersons bool, inclu
 		teamByID[m.ID] = m
 	}
 
-	tzid := time.Local.String()
+	tzid := localTZID()
 
 	var sb strings.Builder
 	sb.WriteString("BEGIN:VCALENDAR\r\n")
@@ -95,7 +107,7 @@ func buildICal(plan *domain.YearPlan, personIDs []string, allPersons bool, inclu
 // Timed events reference the system local TZID so calendar apps honour DST.
 // All-day events fall back to DATE values.
 func icalDateTimes(ev domain.Event, startDate time.Time, includePrep bool) (dtStart, dtEnd string) {
-	tzid := time.Local.String()
+	tzid := localTZID()
 
 	endDate := startDate
 	if ev.DateEnd != "" {

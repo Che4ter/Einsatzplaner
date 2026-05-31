@@ -18,7 +18,9 @@ type YearStats struct {
 	VorOrtHours   float64 `json:"vorOrtHours"` // event hours (duration × days, regardless of staff)
 	PrepHours     float64 `json:"prepHours"`   // total Vor- & Nachbearbeitungszeit (prepTime × staff)
 	TotalNeed     int     `json:"totalNeed"`
-	TotalAssigned int     `json:"totalAssigned"`
+	TotalAssigned int     `json:"totalAssigned"` // raw assigned count (may exceed need when over-assigned)
+	FilledSlots   int     `json:"filledSlots"`   // sum of min(assigned, required) per event — never exceeds need
+	OpenSlots     int     `json:"openSlots"`     // sum of max(0, required − assigned) per event
 	CoveragePct   int     `json:"coveragePct"`
 	UnderCount    int     `json:"underCount"` // events where assigned < required
 }
@@ -88,6 +90,14 @@ func CalcYearStats(events []Event, _ float64, excludedIDs map[string]bool) YearS
 		s.TotalNeed += e.StaffRequired
 		assigned := len(e.AssignedStaff)
 		s.TotalAssigned += assigned
+		// Cap filled slots at the requirement so over-assigning one event cannot
+		// hide an under-staffed event in the aggregate coverage/open-slot numbers.
+		if assigned >= e.StaffRequired {
+			s.FilledSlots += e.StaffRequired
+		} else {
+			s.FilledSlots += assigned
+			s.OpenSlots += e.StaffRequired - assigned
+		}
 		days := e.EventDays()
 		dur := parseDuration(e.TimeFrom, e.TimeTo)
 		s.VorOrtHours += dur * float64(days)
@@ -103,7 +113,7 @@ func CalcYearStats(events []Event, _ float64, excludedIDs map[string]bool) YearS
 		}
 	}
 	if s.TotalNeed > 0 {
-		s.CoveragePct = int(float64(s.TotalAssigned) / float64(s.TotalNeed) * 100)
+		s.CoveragePct = int(float64(s.FilledSlots) / float64(s.TotalNeed) * 100)
 	} else {
 		s.CoveragePct = 100
 	}

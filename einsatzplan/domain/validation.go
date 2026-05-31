@@ -76,7 +76,35 @@ func ValidateEvent(ev Event, year ...int) error {
 			return fmt.Errorf("%w: timeTo %q must be after timeFrom %q", ErrInvalidEvent, ev.TimeTo, ev.TimeFrom)
 		}
 	}
+	if ev.TimeSetup != "" {
+		if !isValidHHMM(ev.TimeSetup) {
+			return fmt.Errorf("%w: timeSetup %q must be HH:MM", ErrInvalidEvent, ev.TimeSetup)
+		}
+		// Setup must start no later than the event start.
+		if ev.TimeFrom != "" && minutes(ev.TimeSetup) > minutes(ev.TimeFrom) {
+			return fmt.Errorf("%w: timeSetup %q must not be after timeFrom %q", ErrInvalidEvent, ev.TimeSetup, ev.TimeFrom)
+		}
+	}
+	if ev.TimeTeardown != "" {
+		if !isValidHHMM(ev.TimeTeardown) {
+			return fmt.Errorf("%w: timeTeardown %q must be HH:MM", ErrInvalidEvent, ev.TimeTeardown)
+		}
+		// Teardown must end no earlier than the event end.
+		if ev.TimeTo != "" && minutes(ev.TimeTeardown) < minutes(ev.TimeTo) {
+			return fmt.Errorf("%w: timeTeardown %q must not be before timeTo %q", ErrInvalidEvent, ev.TimeTeardown, ev.TimeTo)
+		}
+	}
 	return nil
+}
+
+// minutes converts a valid HH:MM string to minutes since midnight.
+// Returns 0 for malformed input (callers validate format beforehand).
+func minutes(hhmm string) int {
+	h, m, ok := parseHHMM(hhmm)
+	if !ok {
+		return 0
+	}
+	return h*60 + m
 }
 
 // ValidateTeamMember returns an error if m is not well-formed.
@@ -104,6 +132,13 @@ func isValidHHMM(s string) bool {
 
 // isValidHexColor reports whether s is a CSS hex color (#rgb or #rrggbb).
 func isValidHexColor(s string) bool {
+	return IsValidHexColor(s)
+}
+
+// IsValidHexColor reports whether s is a CSS hex color (#rgb or #rrggbb).
+// Exported so the storage layer can sanitize untrusted colors loaded from disk
+// before they are interpolated into CSS style attributes in the frontend.
+func IsValidHexColor(s string) bool {
 	if len(s) == 0 || s[0] != '#' {
 		return false
 	}

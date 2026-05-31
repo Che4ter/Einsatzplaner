@@ -3,6 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Content-Security-Policy: defense-in-depth against XSS. The app renders
+       data that can originate from externally-supplied JSON files. Scripts are
+       restricted to same-origin (app.js + the Wails runtime); inline styles are
+       required because the UI interpolates colours into style attributes. -->
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
   <title>Einsatzplan</title>
   <link rel="stylesheet" href="style.css">
   <!-- Wails v3 runtime — injected by the asset server -->
@@ -429,6 +435,14 @@
       <div class="dlg-field">
         <div class="dlg-label">Jahr</div>
         <input class="dlg-input" type="number" id="input-new-year" min="2020" max="2099" value="2026">
+      </div>
+      <div class="dlg-field" style="margin-top:16px">
+        <div class="dlg-label">Einstellungen übernehmen (optional)</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button class="dlg-btn secondary" id="btn-pick-template" type="button">Vorlage wählen…</button>
+          <span id="template-file-label" style="font-size:13px;color:var(--text-muted);word-break:break-all">Kein Vorlage gewählt</span>
+        </div>
+        <div id="template-preview" style="display:none;margin-top:8px;font-size:13px;color:var(--text-muted)"></div>
       </div>
     </div>
     <div class="dlg-foot">

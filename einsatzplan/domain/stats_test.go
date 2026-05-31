@@ -66,6 +66,31 @@ func TestCalcYearStats_Coverage(t *testing.T) {
 	}
 }
 
+func TestCalcYearStats_OverAssignmentDoesNotMaskGaps(t *testing.T) {
+	// Event A is over-assigned (3 of 2); event B is under-assigned (1 of 2).
+	// Raw assigned (4) would equal need (4) and hide B's gap; filled slots must not.
+	events := []domain.Event{
+		{StaffRequired: 2, AssignedStaff: []string{"a", "b", "c"}, TimeFrom: "14:00", TimeTo: "17:00"},
+		{StaffRequired: 2, AssignedStaff: []string{"a"}, TimeFrom: "14:00", TimeTo: "17:00"},
+	}
+	s := domain.CalcYearStats(events, 0, nil)
+	if s.TotalNeed != 4 {
+		t.Errorf("TotalNeed = %d, want 4", s.TotalNeed)
+	}
+	if s.FilledSlots != 3 {
+		t.Errorf("FilledSlots = %d, want 3 (capped per event)", s.FilledSlots)
+	}
+	if s.OpenSlots != 1 {
+		t.Errorf("OpenSlots = %d, want 1 (B's gap)", s.OpenSlots)
+	}
+	if s.CoveragePct != 75 {
+		t.Errorf("CoveragePct = %d, want 75 (not masked to 100)", s.CoveragePct)
+	}
+	if s.UnderCount != 1 {
+		t.Errorf("UnderCount = %d, want 1", s.UnderCount)
+	}
+}
+
 func TestCalcYearStats_Hours(t *testing.T) {
 	// Single-day weekday: 3h duration × 2 people × 1 day = 6h
 	events := []domain.Event{

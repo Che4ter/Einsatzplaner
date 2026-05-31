@@ -6,19 +6,15 @@
 
 import * as Planner from './bindings/einsatzplaner/einsatzplan/service/plannerservice.js';
 import { Events } from '/wails/runtime.js';
-
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const MONATE = ['Januar','Februar','März','April','Mai','Juni',
-                'Juli','August','September','Oktober','November','Dezember'];
-const MONATE_SHORT = MONATE.map(m => m.slice(0, 3));
-const WEEKDAY_SHORT = ['So','Mo','Di','Mi','Do','Fr','Sa'];
-const WEEKDAY_LONG  = ['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
-
-const TEAM_COLORS = [
-  '#0d9488','#2563eb','#9333ea','#db2777','#ea580c',
-  '#65a30d','#0891b2','#7c3aed','#c2410c','#15803d',
-];
+import {
+  MONATE, MONATE_SHORT, WEEKDAY_SHORT, WEEKDAY_LONG, TEAM_COLORS,
+  esc, escNl, getMonth, formatDate, weekNumber, localIso, getWednesdays,
+  paginateByHeight,
+} from './utils.js';
+import {
+  renderEventCard, renderClosedCard, renderActivityEntry,
+  fmtDayHeading, renderQAPopover,
+} from './render.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 2. STATE
@@ -29,6 +25,7 @@ const state = {
   plan:         null,   // full YearPlan from Go
   currentMonth: null,   // 1–12
   currentPage:  'welcome',
+  dirty:        false,  // true when there are unsaved changes (mirrors the Go service)
   // per-page UI state (filter selections etc.)
   statsMonth:   0,      // 0 = all months
   verlaufGroup: 'all',
@@ -104,67 +101,8 @@ function scheduleAutosave() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-function esc(s) {
-  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-function escNl(s) {
-  return esc(s).replace(/\n/g,'<br>');
-}
-
-/** Resolve a month entry regardless of whether the key is a number or string. */
-function getMonth(plan, m) {
-  return plan?.months?.[m] ?? plan?.months?.[String(m)];
-}
-
-function formatDate(iso) {
-  if (!iso) return '';
-  const d = new Date(iso + 'T00:00:00');
-  return WEEKDAY_SHORT[d.getDay()] + ' ' + String(d.getDate()).padStart(2,'0') + '.' + String(d.getMonth()+1).padStart(2,'0') + '.';
-}
-
-function weekNumber(iso) {
-  const d = new Date(iso + 'T00:00:00');
-  // Shift to the Thursday of the same ISO week (Mon=1…Sun=7; Thu=4).
-  // The ISO year of the week is determined by where Thursday falls.
-  const thursday = new Date(d);
-  thursday.setDate(d.getDate() + (4 - (d.getDay() || 7)));
-  const jan4 = new Date(thursday.getFullYear(), 0, 4);
-  const startOfWeek1 = new Date(jan4);
-  startOfWeek1.setDate(jan4.getDate() - (jan4.getDay() || 7) + 1);
-  return Math.ceil((thursday - startOfWeek1) / 604800000);
-}
-
-function localIso(d) {
-  return d.getFullYear() + '-'
-    + String(d.getMonth() + 1).padStart(2, '0') + '-'
-    + String(d.getDate()).padStart(2, '0');
-}
-
-// Date display helpers: Swiss format DD.MM.YYYY <-> ISO YYYY-MM-DD
-function isoToDisplay(iso) {
-  if (!iso) return '';
-  const [y, m, d] = iso.split('-');
-  return `${d}.${m}.${y}`;
-}
-function displayToIso(str) {
-  if (!str) return '';
-  const parts = str.split('.');
-  if (parts.length !== 3 || parts[2].length !== 4) return '';
-  const [d, m, y] = parts;
-  return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
-}
-
-function getWednesdays(year, month) {
-  const days = [];
-  const d = new Date(year, month - 1, 1);
-  while (d.getDay() !== 3) d.setDate(d.getDate() + 1);
-  while (d.getMonth() === month - 1) {
-    days.push(localIso(d));
-    d.setDate(d.getDate() + 7);
-  }
-  return days;
-}
+// Pure date/string helpers live in utils.js (imported above) so they can be
+// unit-tested in Node.
 
 // ── Sidebar ──────────────────────────────────────────────────────────────────
 
@@ -239,7 +177,7 @@ function renderMonthPage(plan, month, events, stats, filterPerson) {
 
   // Hero stats from Go — no business logic in render
   const fullyStaffed = stats.totalEvents - stats.underCount;
-  const openSlots    = Math.max(0, stats.totalNeed - stats.totalAssigned);
+  const openSlots    = stats.openSlots ?? Math.max(0, stats.totalNeed - stats.totalAssigned);
 
   // Calendar weeks
   const wednesdays = getWednesdays(year, month);
@@ -399,72 +337,6 @@ function renderMonthPage(plan, month, events, stats, filterPerson) {
     </div>`;
 }
 
-function renderEventCard(ev, team, month) {
-  const assigned = ev.assignedStaff ?? [];
-  const need     = ev.staffRequired ?? 0;
-  const tone     = assigned.length >= need ? 'ok' : assigned.length >= need - 1 ? 'warn' : 'danger';
-  const teamById = Object.fromEntries(team.map(t => [t.id, t]));
-
-  // Meter pips
-  const pips = Array.from({length: need}, (_, i) =>
-    `<span class="meter-pip${i < assigned.length ? ' filled ' + tone : ''}"></span>`
-  ).join('');
-
-  // Staff chips (assigned)
-  const assignedChips = assigned.map(id => {
-    const m = teamById[id];
-    if (!m) return '';
-    return `<span class="chip" style="background:${esc(m.color)};border-color:${esc(m.color)};color:#fff">
-      <span class="chip-dot" style="background:rgba(255,255,255,0.5)"></span>
-      ${esc(m.name)}
-    </span>`;
-  }).join('');
-
-  // Empty slots
-  const emptySlots = Array.from({length: Math.max(0, need - assigned.length)}, () =>
-    `<button class="chip empty qa-trigger" data-action="open-qa"
-      data-event-id="${esc(ev.id)}" data-month="${month}">+ frei</button>`
-  ).join('');
-
-  const SVG_RIGHT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h13M12 7l5 5-5 5"/></svg>`;
-  const SVG_LEFT  = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12H7M12 7l-5 5 5 5"/></svg>`;
-
-  const timeStr     = ev.timeFrom && ev.timeTo ? `${ev.timeFrom}–${ev.timeTo}` : '';
-  const setupStr    = ev.timeSetup    ? `<span class="ev-edge" title="Aufbau ab ${esc(ev.timeSetup)}">${SVG_RIGHT}${esc(ev.timeSetup)}</span>` : '';
-  const mainStr     = timeStr ? `<span class="ev-core">${esc(ev.timeFrom)}<span>–</span>${esc(ev.timeTo)}</span>` : '';
-  const teardownStr = ev.timeTeardown ? `<span class="ev-edge" title="Abbau bis ${esc(ev.timeTeardown)}">${SVG_LEFT}${esc(ev.timeTeardown)}</span>` : '';
-  const timeHtml    = [setupStr, mainStr, teardownStr].filter(Boolean).join('');
-
-  return `
-    <div class="ev-card ${tone}" data-action="edit-event" data-id="${esc(ev.id)}" data-month="${month}" style="cursor:pointer">
-      <div class="ev-top">
-        <div class="ev-loc">${esc(ev.location || '—')}</div>
-        <div class="ev-times">${timeHtml}</div>
-      </div>
-      <div class="ev-meter">
-        <div class="meter-text ${tone}">${assigned.length}/${need}</div>
-        <div class="meter-pips">${pips}</div>
-      </div>
-      <div class="ev-bottom">
-        ${assignedChips}${emptySlots}
-      </div>
-      ${ev.comment ? `<div class="ev-comment">${escNl(ev.comment)}</div>` : ''}
-    </div>`;
-}
-
-function renderClosedCard(ev, month) {
-  const minusSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
-  const label = ev.comment || ev.location || 'Geschlossen';
-  return `
-    <div class="closed-card" data-action="edit-event" data-id="${esc(ev.id)}" data-month="${month}">
-      <div class="closed-icon">${minusSvg}</div>
-      <div class="closed-main">
-        <div class="closed-title">Keine Durchführung</div>
-        <div class="closed-reason">${esc(label)}</div>
-      </div>
-    </div>`;
-}
-
 // ── Statistics page ───────────────────────────────────────────────────────────
 
 function renderStatisticsPage(plan, stats, personStats, filterMonth) {
@@ -538,7 +410,7 @@ function renderStatisticsPage(plan, stats, personStats, filterMonth) {
         <div class="stat-card">
           <div class="stat-card-kicker">Abdeckung</div>
           <div class="stat-card-num ${cvClass}">${stats.coveragePct}%</div>
-          <div class="stat-card-sub">${stats.totalAssigned} von ${stats.totalNeed} besetzt</div>
+          <div class="stat-card-sub">${stats.filledSlots ?? stats.totalAssigned} von ${stats.totalNeed} besetzt</div>
         </div>
         <div class="stat-card">
           <div class="stat-card-kicker">Unterbesetzt</div>
@@ -597,7 +469,7 @@ function renderSettingsPage(plan) {
     </div>`;
   }).join('');
 
-  const teamRows = team.map(m => `
+  const teamRows = team.slice().sort((a, b) => a.name.localeCompare(b.name)).map(m => `
     <div class="a-row team${m.active ? '' : ' inactive'}">
       <span class="person-name-chip" style="background:${esc(m.color)}">${esc(m.name)}</span>
       <div class="a-row-main">
@@ -685,32 +557,6 @@ const ACTION_GROUP = {
   note:   'notiz',
 };
 
-const ACTION_ICON_CLASS = {
-  assign:        'assign',  unassign:      'unassign', swap:   'swap',
-  create:        'create',  edit:          'edit',     delete: 'delete',
-  close:         'close',   'close-batch': 'close',    reopen: 'reopen',
-  note:          'note',
-};
-
-const ICON_SVG = {
-  userPlus: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>`,
-  userMinus:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="23" y1="11" x2="17" y2="11"/></svg>`,
-  swap:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`,
-  edit:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
-  plus:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
-  trash:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>`,
-  pause:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`,
-  check:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
-  note:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`,
-};
-
-const ACTION_ICON_NAME = {
-  assign:        'userPlus',  unassign:      'userMinus', swap:   'swap',
-  create:        'plus',      edit:          'edit',      delete: 'trash',
-  close:         'pause',     'close-batch': 'pause',     reopen: 'check',
-  note:          'note',
-};
-
 function renderVerlaufPage(plan, log, groupFilter) {
   const { team } = plan;
   const teamById = Object.fromEntries(team.map(m => [m.id, m]));
@@ -782,144 +628,6 @@ function renderVerlaufPage(plan, log, groupFilter) {
         ? `<div class="act-empty"><div class="big">Keine Aktivität</div><div>Noch keine Einträge vorhanden.</div></div>`
         : dayBlocks}
     </div>`;
-}
-
-function renderActivityEntry(e, teamById, today) {
-  const iconName  = ACTION_ICON_NAME[e.action] ?? 'edit';
-  const iconClass = ACTION_ICON_CLASS[e.action] ?? 'edit';
-  const time      = e.at ? e.at.slice(11, 16) : '';
-  const isRecent  = e.at?.slice(0, 10) === today;
-
-  const FIELD_LABELS = {
-    location:      'Ort',
-    time:          'Zeit',
-    timeFrom:      'Beginn',
-    timeTo:        'Ende',
-    comment:       'Notiz',
-    staffRequired: 'Personalbedarf',
-    date:          'Datum',
-    dateEnd:       'Enddatum',
-    type:          'Typ',
-  };
-
-  const humanFieldValue = (field, val) => {
-    if (!val && val !== 0) return '—';
-    if (field === 'type') return EVENT_TYPE_LABELS[val] ?? val;
-    if (field === 'date' || field === 'dateEnd') return formatDate(val);
-    if (field === 'comment' && val.length > 50) return val.slice(0, 48) + '…';
-    return val;
-  };
-
-  const EVENT_TYPE_LABELS = {
-    wednesday: 'Mittwoch',
-    weekday:   'Wochentag',
-    weekend:   'Wochenende',
-  };
-
-  // Colored inline chip for a person
-  const personChip = (id) => {
-    const p = id ? teamById[id] : null;
-    if (!p) return '';
-    return `<span class="act-person-chip" style="background:${esc(p.color)}"><span class="pc-dot"></span>${esc(p.name)}</span>`;
-  };
-
-  // Target pill — navigates to the relevant month
-  const targetPill = e.target?.date
-    ? `<button class="act-target-pill" data-action="nav-month" data-month="${e.target.month ?? ''}">${esc(formatDate(e.target.date))}${e.target.location ? ' · ' + esc(e.target.location) : ''}</button>`
-    : '';
-
-  // Human-readable from→to for edit entries
-  const fromToHtml = (from, to) => {
-    if (!from && !to) return '';
-    const parts = [];
-    if (from) parts.push(`<span class="act-detail-from">${esc(from)}</span>`);
-    if (to)   parts.push(`<span class="act-detail-to">${from ? '→ ' : ''}${esc(to)}</span>`);
-    return `<div class="act-detail">${parts.join(' ')}</div>`;
-  };
-
-  let textHtml = '';
-  let detailHtml = '';
-
-  switch (e.action) {
-    case 'assign': {
-      const chip = personChip(e.person);
-      textHtml = chip
-        ? `${chip} eingeteilt${targetPill ? ' für ' + targetPill : ''}`
-        : `Person eingeteilt${targetPill ? ' für ' + targetPill : ''}`;
-      break;
-    }
-    case 'unassign': {
-      const chip = personChip(e.person);
-      textHtml = chip
-        ? `${chip} abgemeldet${targetPill ? ' von ' + targetPill : ''}`
-        : `Person abgemeldet${targetPill ? ' von ' + targetPill : ''}`;
-      break;
-    }
-    case 'swap': {
-      const fromChip = personChip(e.from) || esc(e.from || '?');
-      const toChip   = personChip(e.to)   || esc(e.to   || '?');
-      textHtml = `Tausch${targetPill ? ' bei ' + targetPill : ''}: ${fromChip} → ${toChip}`;
-      break;
-    }
-    case 'create': {
-      const typeLabel = EVENT_TYPE_LABELS[e.target?.type] ?? '';
-      textHtml = `Neuer${typeLabel ? ' ' + typeLabel + '-' : ''}Einsatz erstellt${targetPill ? ': ' + targetPill : ''}`;
-      break;
-    }
-    case 'delete':
-      textHtml = `Einsatz gelöscht${targetPill ? ': ' + targetPill : ''}`;
-      break;
-    case 'edit': {
-      const fieldLabel = FIELD_LABELS[e.field] ?? e.field ?? 'Feld';
-      const fromVal = humanFieldValue(e.field, e.from);
-      const toVal   = humanFieldValue(e.field, e.to);
-      const hasChange = e.from || e.to;
-      const changePart = hasChange
-        ? `: <span class="act-from">${esc(fromVal)}</span> → <span class="act-to">${esc(toVal)}</span>`
-        : ' geändert';
-      textHtml = `<em>${esc(fieldLabel)}</em>${targetPill ? ' bei ' + targetPill : ''}${changePart}`;
-      break;
-    }
-    case 'close':
-      textHtml = `${targetPill} als „Keine Durchführung" markiert`;
-      if (e.reason) detailHtml = `<div class="act-detail">Grund: ${esc(e.reason)}</div>`;
-      break;
-    case 'close-batch':
-      textHtml = `${e.count ?? 'Mehrere'} Termine als Ferien markiert${targetPill ? ' ab ' + targetPill : ''}`;
-      if (e.reason) detailHtml = `<div class="act-detail">Grund: ${esc(e.reason)}</div>`;
-      break;
-    case 'reopen':
-      textHtml = `${targetPill} reaktiviert`;
-      break;
-    case 'note':
-      textHtml = `Notiz${targetPill ? ' bei ' + targetPill : ''} gesetzt`;
-      if (e.note) detailHtml = `<div class="act-detail">„${esc(e.note)}"</div>`;
-      break;
-    default:
-      textHtml = targetPill ? `Änderung bei ${targetPill}` : 'Änderung';
-  }
-
-  return `
-    <div class="act-entry">
-      <span class="act-time">${esc(time)}</span>
-      <span class="act-icon ${iconClass}">${ICON_SVG[iconName] ?? ''}</span>
-      <div class="act-body">
-        <div class="act-text">${textHtml}</div>
-        ${detailHtml}
-      </div>
-    </div>`;
-}
-
-function fmtDayHeading(dayIso, todayIso) {
-  const d     = new Date(dayIso     + 'T00:00:00');
-  const today = new Date(todayIso   + 'T00:00:00');
-  const diff  = Math.round((today - d) / 86400000);
-  const dow   = WEEKDAY_LONG[d.getDay()];
-  const dateStr = `${dow}, ${d.getDate()}. ${MONATE[d.getMonth()]}`;
-  if (diff === 0) return { kicker: 'Heute',    body: dateStr, isToday: true };
-  if (diff === 1) return { kicker: 'Gestern',  body: dateStr, isToday: false };
-  if (diff <  7) return { kicker: dow,         body: `${d.getDate()}. ${MONATE[d.getMonth()]}`, isToday: false };
-  return              { kicker: null,          body: dateStr, isToday: false };
 }
 
 // ── Year overview page ────────────────────────────────────────────────────────
@@ -1205,22 +913,7 @@ function renderYearPage(plan, summaries, yearStats, closedCount, personStats, fi
 }
 
 // ── Quick-assign popover ──────────────────────────────────────────────────────
-
-function renderQAPopover(team, assignedStaff, eventId, month) {
-  const rows = team.filter(m => m.active).slice().sort((a,b) => a.name.localeCompare(b.name)).map(m => {
-    const on = assignedStaff.includes(m.id);
-    return `<button class="qa-item${on ? ' assigned' : ''}"
-      data-action="qa-toggle" data-event-id="${esc(eventId)}" data-month="${month}" data-id="${esc(m.id)}">
-      <span class="qa-dot" style="background:${esc(m.color)}"></span>
-      <span class="qa-name">${esc(m.name)}</span>
-      ${on ? '<span class="qa-mark">zugeteilt</span>' : ''}
-    </button>`;
-  }).join('');
-  return `<div class="qa-pop" id="qa-pop-inner">
-    <div class="qa-pop-head">Wer übernimmt?</div>
-    ${rows}
-  </div>`;
-}
+// renderQAPopover lives in render.js (imported above).
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 4. CONTROLLERS
@@ -1237,6 +930,7 @@ function showPage(id) {
 }
 
 function setDirtyUI(isDirty) {
+  state.dirty = isDirty;
   const pill  = document.getElementById('save-state');
   const label = document.getElementById('save-state-label');
   if (pill)  pill.classList.toggle('dirty', isDirty);
@@ -1369,6 +1063,7 @@ async function showYearPage() {
 // ── File operations ───────────────────────────────────────────────────────────
 
 async function cmdNew() {
+  _resetNewYearModal();
   showModal('modal-new-year');
 }
 
@@ -1827,6 +1522,30 @@ async function tryRestoreLastFile() {
 
 // ── New year modal ────────────────────────────────────────────────────────────
 
+let _newYearTemplatePath = null;
+
+function _resetNewYearModal() {
+  _newYearTemplatePath = null;
+  const lbl = document.getElementById('template-file-label');
+  if (lbl) lbl.textContent = 'Kein Vorlage gewählt';
+  const preview = document.getElementById('template-preview');
+  if (preview) { preview.style.display = 'none'; preview.textContent = ''; }
+}
+
+async function pickTemplateFile() {
+  try {
+    const path = await Planner.PickTemplateFile();
+    if (!path) return;
+    _newYearTemplatePath = path;
+    const lbl = document.getElementById('template-file-label');
+    if (lbl) lbl.textContent = path.split('/').pop().split('\\').pop();
+    const preview = document.getElementById('template-preview');
+    if (preview) { preview.textContent = `Pfad: ${path}`; preview.style.display = 'block'; }
+  } catch (e) {
+    showToast('Fehler beim Auswählen: ' + e, 'error');
+  }
+}
+
 async function confirmNewYear() {
   const year = parseInt(document.getElementById('input-new-year').value, 10);
   if (!year || year < 2020 || year > 2099) {
@@ -1834,9 +1553,15 @@ async function confirmNewYear() {
     return;
   }
   try {
-    const plan = await Planner.CreatePlan(year);
+    let plan;
+    if (_newYearTemplatePath) {
+      plan = await Planner.CreatePlanFromTemplate(year, _newYearTemplatePath);
+    } else {
+      plan = await Planner.CreatePlan(year);
+    }
     if (!plan) return; // user cancelled dialog
     closeModal('modal-new-year');
+    _resetNewYearModal();
     await onPlanLoaded(plan);
     showToast(`Einsatzplan ${year} erstellt.`, 'success');
   } catch (e) {
@@ -2077,20 +1802,7 @@ function doExportPDF() {
 
   // Group months into pages. Each page is an explicit div with its own padding,
   // team name header and footer — so margins, header and footer repeat on every page.
-  const pageGroups = [];
-  let curGroup = [];
-  let usedMM = H_TITLE + H_FOOTER;
-  for (const md of monthData) {
-    if (curGroup.length > 0 && usedMM + md.estimatedMM > PAGE_H) {
-      pageGroups.push(curGroup);
-      curGroup = [md];
-      usedMM = H_TITLE + H_FOOTER + md.estimatedMM;
-    } else {
-      curGroup.push(md);
-      usedMM += md.estimatedMM;
-    }
-  }
-  if (curGroup.length > 0) pageGroups.push(curGroup);
+  const pageGroups = paginateByHeight(monthData, PAGE_H, H_TITLE + H_FOOTER);
 
   const footerDate = new Date().toLocaleDateString('de-CH');
   const footerHtml = `<div class="p-page-footer">Stand: ${footerDate} · Einsatzplan ${plan.year}</div>`;
@@ -2552,7 +2264,7 @@ async function refreshCurrentPage() {
 
 async function handleExternalChange() {
   if (!state.plan) return;
-  const isDirty = document.getElementById('save-state')?.classList.contains('dirty') ?? false;
+  const isDirty = state.dirty;
   if (!isDirty) {
     // No unsaved changes — reload silently and stay on current page.
     try {
@@ -2632,7 +2344,8 @@ document.getElementById('btn-modal-time-confirm')?.addEventListener('click', con
 document.getElementById('btn-modal-time-cancel')?.addEventListener('click',  () => closeModal('modal-time'));
 document.getElementById('btn-modal-time-cancel2')?.addEventListener('click', () => closeModal('modal-time'));
 document.getElementById('btn-modal-new-confirm')?.addEventListener('click', confirmNewYear);
-document.getElementById('btn-modal-new-cancel')?.addEventListener('click',  () => closeModal('modal-new-year'));
+document.getElementById('btn-modal-new-cancel')?.addEventListener('click',  () => { _resetNewYearModal(); closeModal('modal-new-year'); });
+document.getElementById('btn-pick-template')?.addEventListener('click', pickTemplateFile);
 
 // Keyboard shortcuts
 document.addEventListener('keydown', e => {

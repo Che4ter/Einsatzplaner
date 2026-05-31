@@ -14,7 +14,10 @@ import (
 // Version is set at build time via -ldflags "-X main.Version=v1.2.3".
 var Version = "dev"
 
-//go:embed all:frontend
+// Embeds the built frontend. The plain (non-`all:`) form intentionally skips
+// files and directories whose names begin with "_" or "." — e.g. the
+// frontend/_tests/ unit tests, which must not ship in the binary.
+//go:embed frontend
 var assets embed.FS
 
 //go:embed build/appicon.png
