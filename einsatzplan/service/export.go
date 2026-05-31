@@ -15,7 +15,7 @@ import (
 //   - empty (nil or len==0): include no events (caller must pass nil to mean "all")
 //
 // Use the sentinel nil to export all events regardless of assignment.
-func buildICal(plan *domain.YearPlan, personIDs []string, allPersons bool) string {
+func buildICal(plan *domain.YearPlan, personIDs []string, allPersons bool, includePrep bool) string {
 	personSet := make(map[string]bool, len(personIDs))
 	for _, id := range personIDs {
 		personSet[id] = true
@@ -66,7 +66,7 @@ func buildICal(plan *domain.YearPlan, personIDs []string, allPersons bool) strin
 				continue
 			}
 
-			dtStart, dtEnd := icalDateTimes(ev, startDate)
+			dtStart, dtEnd := icalDateTimes(ev, startDate, includePrep)
 
 			summary := ev.Location
 			if summary == "" {
@@ -77,12 +77,12 @@ func buildICal(plan *domain.YearPlan, personIDs []string, allPersons bool) strin
 			sb.WriteString(fmt.Sprintf("UID:%s-%d-%s@einsatzplan\r\n", ev.ID, plan.Year, ev.Date))
 			fmt.Fprintf(&sb, "%s\r\n", dtStart)
 			fmt.Fprintf(&sb, "%s\r\n", dtEnd)
-			fmt.Fprintf(&sb, "SUMMARY:%s\r\n", icalEscape(summary))
+			sb.WriteString(icalFold("SUMMARY:" + icalEscape(summary)))
 			if desc := icalDescription(ev, teamByID); desc != "" {
-				fmt.Fprintf(&sb, "DESCRIPTION:%s\r\n", desc)
+				sb.WriteString(icalFold("DESCRIPTION:" + desc))
 			}
 			if ev.Location != "" {
-				fmt.Fprintf(&sb, "LOCATION:%s\r\n", icalEscape(ev.Location))
+				sb.WriteString(icalFold("LOCATION:" + icalEscape(ev.Location)))
 			}
 			sb.WriteString("END:VEVENT\r\n")
 		}
@@ -94,7 +94,7 @@ func buildICal(plan *domain.YearPlan, personIDs []string, allPersons bool) strin
 // icalDateTimes returns the DTSTART and DTEND property strings for an event.
 // Timed events reference the system local TZID so calendar apps honour DST.
 // All-day events fall back to DATE values.
-func icalDateTimes(ev domain.Event, startDate time.Time) (dtStart, dtEnd string) {
+func icalDateTimes(ev domain.Event, startDate time.Time, includePrep bool) (dtStart, dtEnd string) {
 	tzid := time.Local.String()
 
 	endDate := startDate
@@ -105,8 +105,18 @@ func icalDateTimes(ev domain.Event, startDate time.Time) (dtStart, dtEnd string)
 	}
 
 	if ev.TimeFrom != "" && ev.TimeTo != "" {
-		tf, err1 := time.Parse("15:04", ev.TimeFrom)
-		tt, err2 := time.Parse("15:04", ev.TimeTo)
+		startTimeStr := ev.TimeFrom
+		endTimeStr := ev.TimeTo
+		if includePrep {
+			if ev.TimeSetup != "" {
+				startTimeStr = ev.TimeSetup
+			}
+			if ev.TimeTeardown != "" {
+				endTimeStr = ev.TimeTeardown
+			}
+		}
+		tf, err1 := time.Parse("15:04", startTimeStr)
+		tt, err2 := time.Parse("15:04", endTimeStr)
 		if err1 == nil && err2 == nil {
 			start := time.Date(startDate.Year(), startDate.Month(), startDate.Day(),
 				tf.Hour(), tf.Minute(), 0, 0, time.Local)

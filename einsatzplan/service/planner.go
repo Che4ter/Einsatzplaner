@@ -65,6 +65,12 @@ func (s *PlannerService) CreatePlan(ctx context.Context, year int) (*domain.Year
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.plan = plan
+	s.path = path
+	s.dirty = false
+	if info, err2 := os.Stat(path); err2 == nil {
+		s.loadedMtime = info.ModTime()
+	}
+	s.restartPoller(path)
 	return storage.CopyPlan(s.plan), nil
 }
 
@@ -142,6 +148,7 @@ func (s *PlannerService) SavePlan(ctx context.Context) error {
 	if info, err2 := os.Stat(path); err2 == nil {
 		s.loadedMtime = info.ModTime()
 	}
+	s.restartPoller(path)
 	s.mu.Unlock()
 	return nil
 }
@@ -195,13 +202,7 @@ func (s *PlannerService) SavePlanAs(ctx context.Context) (string, error) {
 	if info, err2 := os.Stat(path); err2 == nil {
 		s.loadedMtime = info.ModTime()
 	}
-	// Restart poller for the new path.
-	if s.pollCancel != nil {
-		s.pollCancel()
-	}
-	pollCtx, cancel := context.WithCancel(context.Background())
-	s.pollCancel = cancel
-	go s.startFilePoller(pollCtx, path)
+	s.restartPoller(path)
 	s.mu.Unlock()
 	return path, nil
 }
@@ -705,14 +706,19 @@ func (s *PlannerService) loadFromPath(ctx context.Context, path string) (*domain
 		s.loadedMtime = info.ModTime()
 	}
 	saveRecentPaths(prependUnique(loadRecentPaths(), path))
-	// Cancel any running poller and start a fresh one for the new path.
+	s.restartPoller(path)
+	return storage.CopyPlan(s.plan), nil
+}
+
+// restartPoller cancels any running file-change poller and starts a new one for path.
+// Must be called with s.mu write-locked.
+func (s *PlannerService) restartPoller(path string) {
 	if s.pollCancel != nil {
 		s.pollCancel()
 	}
 	pollCtx, cancel := context.WithCancel(context.Background())
 	s.pollCancel = cancel
 	go s.startFilePoller(pollCtx, path)
-	return storage.CopyPlan(s.plan), nil
 }
 
 // startFilePoller checks the file's mtime every 15 s and emits an event to
@@ -854,7 +860,7 @@ func prependUnique(paths []string, path string) []string {
 // personIDs controls which events are included:
 //   - non-empty slice: only events where at least one of the given members is assigned
 //   - nil: all events regardless of assignment
-func (s *PlannerService) ExportICal(ctx context.Context, personIDs []string) error {
+func (s *PlannerService) ExportICal(ctx context.Context, personIDs []string, includePrep bool) error {
 	// Build the iCal content under the read-lock, then release before showing the dialog.
 	s.mu.RLock()
 	if err := s.requirePlan(); err != nil {
@@ -866,7 +872,7 @@ func (s *PlannerService) ExportICal(ctx context.Context, personIDs []string) err
 		return fmt.Errorf("no app context")
 	}
 	allPersons := personIDs == nil
-	content := buildICal(s.plan, personIDs, allPersons)
+	content := buildICal(s.plan, personIDs, allPersons, includePrep)
 	year := s.plan.Year
 	s.mu.RUnlock()
 

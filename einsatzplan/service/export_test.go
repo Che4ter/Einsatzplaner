@@ -76,7 +76,7 @@ func TestIcalDescription_Empty(t *testing.T) {
 
 func TestIcalDateTimes_Timed(t *testing.T) {
 	ev := domain.Event{TimeFrom: "14:00", TimeTo: "17:00"}
-	dtStart, dtEnd := icalDateTimes(ev, date("2026-05-06"))
+	dtStart, dtEnd := icalDateTimes(ev, date("2026-05-06"), true)
 	// DTSTART;TZID=<iana-name>:<datetime>  — RFC 5545 §3.2.19
 	if !strings.Contains(dtStart, ":20260506T140000") || !strings.HasPrefix(dtStart, "DTSTART;TZID=") {
 		t.Errorf("DTSTART = %q", dtStart)
@@ -87,7 +87,7 @@ func TestIcalDateTimes_Timed(t *testing.T) {
 }
 
 func TestIcalDateTimes_AllDay(t *testing.T) {
-	dtStart, dtEnd := icalDateTimes(domain.Event{}, date("2026-05-06"))
+	dtStart, dtEnd := icalDateTimes(domain.Event{}, date("2026-05-06"), true)
 	if dtStart != "DTSTART;VALUE=DATE:20260506" {
 		t.Errorf("DTSTART = %q", dtStart)
 	}
@@ -98,7 +98,7 @@ func TestIcalDateTimes_AllDay(t *testing.T) {
 
 func TestIcalDateTimes_MultiDayTimed(t *testing.T) {
 	ev := domain.Event{Date: "2026-05-30", DateEnd: "2026-05-31", TimeFrom: "14:00", TimeTo: "17:00"}
-	dtStart, dtEnd := icalDateTimes(ev, date("2026-05-30"))
+	dtStart, dtEnd := icalDateTimes(ev, date("2026-05-30"), true)
 	if !strings.Contains(dtStart, ":20260530T140000") || !strings.HasPrefix(dtStart, "DTSTART;TZID=") {
 		t.Errorf("DTSTART = %q", dtStart)
 	}
@@ -110,7 +110,7 @@ func TestIcalDateTimes_MultiDayTimed(t *testing.T) {
 
 func TestIcalDateTimes_MultiDayAllDay(t *testing.T) {
 	ev := domain.Event{Date: "2026-05-30", DateEnd: "2026-05-31"}
-	_, dtEnd := icalDateTimes(ev, date("2026-05-30"))
+	_, dtEnd := icalDateTimes(ev, date("2026-05-30"), true)
 	if dtEnd != "DTEND;VALUE=DATE:20260601" {
 		t.Errorf("DTEND = %q, want 20260601", dtEnd)
 	}
@@ -135,7 +135,7 @@ func TestBuildICal_ContainsVCalendar(t *testing.T) {
 		Type: domain.EventTypeWednesday, Date: "2026-05-06",
 		TimeFrom: "14:00", TimeTo: "17:00",
 	})
-	out := buildICal(plan, nil, true)
+	out := buildICal(plan, nil, true, true)
 	for _, want := range []string{
 		"BEGIN:VCALENDAR", "END:VCALENDAR",
 		"BEGIN:VEVENT", "END:VEVENT",
@@ -157,7 +157,7 @@ func TestBuildICal_SkipsClosedEvents(t *testing.T) {
 	plan := planWithEvent(domain.Event{
 		Type: domain.EventTypeWednesday, Date: "2026-05-06", IsClosed: true,
 	})
-	if strings.Contains(buildICal(plan, nil, true), "BEGIN:VEVENT") {
+	if strings.Contains(buildICal(plan, nil, true, true), "BEGIN:VEVENT") {
 		t.Error("closed event must not appear in export")
 	}
 }
@@ -167,7 +167,7 @@ func TestBuildICal_PersonFilter_Included(t *testing.T) {
 		Type: domain.EventTypeWednesday, Date: "2026-05-06",
 		AssignedStaff: []string{"a"},
 	})
-	if !strings.Contains(buildICal(plan, []string{"a"}, false), "BEGIN:VEVENT") {
+	if !strings.Contains(buildICal(plan, []string{"a"}, false, true), "BEGIN:VEVENT") {
 		t.Error("event assigned to 'a' must appear when filtering by 'a'")
 	}
 }
@@ -177,7 +177,7 @@ func TestBuildICal_PersonFilter_Excluded(t *testing.T) {
 		Type: domain.EventTypeWednesday, Date: "2026-05-06",
 		AssignedStaff: []string{"b"},
 	})
-	if strings.Contains(buildICal(plan, []string{"a"}, false), "BEGIN:VEVENT") {
+	if strings.Contains(buildICal(plan, []string{"a"}, false, true), "BEGIN:VEVENT") {
 		t.Error("event assigned only to 'b' must not appear when filtering by 'a'")
 	}
 }
@@ -188,7 +188,7 @@ func TestBuildICal_EmptyPersonIDs_ExcludesAll(t *testing.T) {
 		AssignedStaff: []string{"a"},
 	})
 	// empty non-nil slice + allPersons=false means no persons selected
-	if strings.Contains(buildICal(plan, []string{}, false), "BEGIN:VEVENT") {
+	if strings.Contains(buildICal(plan, []string{}, false, true), "BEGIN:VEVENT") {
 		t.Error("empty personIDs with allPersons=false must produce no events")
 	}
 }
@@ -197,7 +197,7 @@ func TestBuildICal_NilPersonIDs_IncludesAll(t *testing.T) {
 	plan := planWithEvent(domain.Event{
 		Type: domain.EventTypeWednesday, Date: "2026-05-06",
 	})
-	if !strings.Contains(buildICal(plan, nil, true), "BEGIN:VEVENT") {
+	if !strings.Contains(buildICal(plan, nil, true, true), "BEGIN:VEVENT") {
 		t.Error("nil personIDs with allPersons=true must include all events")
 	}
 }
@@ -206,7 +206,7 @@ func TestBuildICal_CalName(t *testing.T) {
 	plan := planWithEvent(domain.Event{
 		Type: domain.EventTypeWednesday, Date: "2026-05-06",
 	})
-	if !strings.Contains(buildICal(plan, nil, true), "X-WR-CALNAME:Testteam") {
+	if !strings.Contains(buildICal(plan, nil, true, true), "X-WR-CALNAME:Testteam") {
 		t.Error("X-WR-CALNAME:Testteam not found")
 	}
 }
@@ -216,7 +216,7 @@ func TestBuildICal_MultiDayDTEND(t *testing.T) {
 		Type: domain.EventTypeWeekend, Date: "2026-05-30", DateEnd: "2026-05-31",
 		TimeFrom: "14:00", TimeTo: "17:00",
 	})
-	out := buildICal(plan, nil, true)
+	out := buildICal(plan, nil, true, true)
 	// DTEND must be on the DateEnd date (2026-05-31), not the start date.
 	if !strings.Contains(out, ":20260531T170000") || !strings.Contains(out, "DTEND;TZID=") {
 		t.Errorf("multi-day DTEND must use DateEnd in TZID format; got:\n%s", out)

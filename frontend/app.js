@@ -53,6 +53,31 @@ function setAutosave(enabled) {
   }
 }
 
+// Handles a save conflict: prompts the user and force-overwrites if confirmed.
+// Always sets _autosavePaused=true while waiting; resets it on success.
+async function handleSaveConflict() {
+  _autosavePaused = true;
+  const ok = await showConfirm({
+    kicker: 'Konflikt',
+    title: 'Datei wurde extern geändert',
+    message: 'Eine andere Person hat diese Datei gespeichert.\nTrotzdem überschreiben?',
+    okLabel: 'Überschreiben',
+  });
+  if (ok) {
+    try {
+      await Planner.ForceOverwriteSave();
+      setDirtyUI(false);
+      hideExternalChangeBanner();
+      _autosavePaused = false;
+      showToast('Gespeichert (überschrieben).', 'success');
+    } catch (e) {
+      showToast('Fehler beim Speichern: ' + e, 'error');
+    }
+  } else {
+    showExternalChangeBanner(true);
+  }
+}
+
 function scheduleAutosave() {
   if (!isAutosaveEnabled() || !state.plan || _autosavePaused) return;
   if (_autosaveTimer) clearTimeout(_autosaveTimer);
@@ -64,26 +89,7 @@ function scheduleAutosave() {
     } catch (e) {
       const msg = String(e);
       if (msg.includes('conflict')) {
-        _autosavePaused = true;
-        const ok = await showConfirm({
-          kicker: 'Konflikt',
-          title: 'Datei wurde extern geändert',
-          message: 'Eine andere Person hat diese Datei gespeichert.<br>Trotzdem überschreiben?',
-          okLabel: 'Überschreiben',
-        });
-        if (ok) {
-          try {
-            await Planner.ForceOverwriteSave();
-            setDirtyUI(false);
-            hideExternalChangeBanner();
-            _autosavePaused = false;
-            showToast('Gespeichert (überschrieben).', 'success');
-          } catch (e2) {
-            showToast('Fehler beim Speichern: ' + e2, 'error');
-          }
-        } else {
-          showExternalChangeBanner(true);
-        }
+        await handleSaveConflict();
       } else {
         showToast('Automatisches Speichern fehlgeschlagen.', 'error');
       }
@@ -106,10 +112,6 @@ function escNl(s) {
   return esc(s).replace(/\n/g,'<br>');
 }
 
-function firstName(name) {
-  return (name ?? '').split(' ')[0];
-}
-
 /** Resolve a month entry regardless of whether the key is a number or string. */
 function getMonth(plan, m) {
   return plan?.months?.[m] ?? plan?.months?.[String(m)];
@@ -130,7 +132,7 @@ function weekNumber(iso) {
   const jan4 = new Date(thursday.getFullYear(), 0, 4);
   const startOfWeek1 = new Date(jan4);
   startOfWeek1.setDate(jan4.getDate() - (jan4.getDay() || 7) + 1);
-  return Math.ceil((thursday - startOfWeek1) / 604800000) + 1;
+  return Math.ceil((thursday - startOfWeek1) / 604800000);
 }
 
 function localIso(d) {
@@ -212,7 +214,7 @@ function renderMonthPage(plan, month, events, stats, filterPerson) {
   const closedEvents = events.filter(e => e.isClosed);
 
   // ── Filter bar ────────────────────────────────────────────────────────────
-  const activeTeam = team.filter(m => m.active);
+  const activeTeam = team.filter(m => m.active).slice().sort((a,b) => a.name.localeCompare(b.name));
   const allOn = !filterPerson;
   const filterChips = [
     `<button class="filter-chip all${allOn ? ' on' : ''}" data-action="month-person" data-id="">Alle anzeigen</button>`,
@@ -924,7 +926,7 @@ function fmtDayHeading(dayIso, todayIso) {
 
 function renderYearPage(plan, summaries, yearStats, closedCount, personStats, filterPerson) {
   const { year, team } = plan;
-  const activeTeam = team.filter(m => m.active);
+  const activeTeam = team.filter(m => m.active).slice().sort((a,b) => a.name.localeCompare(b.name));
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
   const currentMonth = today.getFullYear() === year ? today.getMonth() + 1 : null;
@@ -1205,7 +1207,7 @@ function renderYearPage(plan, summaries, yearStats, closedCount, personStats, fi
 // ── Quick-assign popover ──────────────────────────────────────────────────────
 
 function renderQAPopover(team, assignedStaff, eventId, month) {
-  const rows = team.filter(m => m.active).map(m => {
+  const rows = team.filter(m => m.active).slice().sort((a,b) => a.name.localeCompare(b.name)).map(m => {
     const on = assignedStaff.includes(m.id);
     return `<button class="qa-item${on ? ' assigned' : ''}"
       data-action="qa-toggle" data-event-id="${esc(eventId)}" data-month="${month}" data-id="${esc(m.id)}">
@@ -1259,12 +1261,26 @@ function refreshSidebarSync(summaries) {
 
 // ── After plan loaded ────────────────────────────────────────────────────────
 
-async function onPlanLoaded(plan) {
-  state.plan = plan;
+function updateSidebarMeta(plan) {
   const teamName = plan.settings?.teamName;
   document.getElementById('sidebar-team-name').textContent = teamName || 'Einsatzplan';
   document.getElementById('sidebar-year-label').textContent = `Einsatzplan · ${plan.year}`;
   document.title = `Einsatzplan ${plan.year}`;
+}
+
+// Applies a freshly reloaded plan to state/UI and refreshes the current page.
+async function applyReloadedPlan(plan) {
+  state.plan = plan;
+  updateSidebarMeta(plan);
+  setDirtyUI(false);
+  hideExternalChangeBanner();
+  await refreshCurrentPage();
+  showToast('Ansicht aktualisiert.', 'success');
+}
+
+async function onPlanLoaded(plan) {
+  state.plan = plan;
+  updateSidebarMeta(plan);
   document.getElementById('sb-filename').textContent = plan.year;
   setDirtyUI(false);
   Planner.GetCurrentFileName().then(name => {
@@ -1376,23 +1392,7 @@ async function cmdSave() {
   } catch (e) {
     const msg = String(e);
     if (msg.includes('conflict')) {
-      const ok = await showConfirm({
-        kicker: 'Konflikt',
-        title: 'Datei wurde extern geändert',
-        message: 'Eine andere Person hat diese Datei gespeichert.<br>Trotzdem überschreiben?',
-        okLabel: 'Überschreiben',
-      });
-      if (ok) {
-        try {
-          await Planner.ForceOverwriteSave();
-          setDirtyUI(false);
-          hideExternalChangeBanner();
-          _autosavePaused = false;
-          showToast('Gespeichert (überschrieben).', 'success');
-        } catch (e2) {
-          showToast('Fehler beim Speichern: ' + e2, 'error');
-        }
-      }
+      await handleSaveConflict();
     } else {
       showToast('Fehler beim Speichern: ' + e, 'error');
     }
@@ -1412,6 +1412,7 @@ async function openAddEvent(type, date, month) {
   _eventMonth = month ?? state.currentMonth;
   _eventType  = type;
   _eventDate  = date || '';
+  _eventFromPage = null;
 
   document.getElementById('modal-event-title').textContent = 'Einsatz hinzufügen';
   document.getElementById('btn-modal-event-delete').style.display = 'none';
@@ -1434,6 +1435,7 @@ async function openAddEvent(type, date, month) {
     document.getElementById('event-display-date').textContent = type === 'weekend' ? 'Wochenende' : 'Wochentag';
   }
   dateEndGroup.style.display = type === 'weekend' ? '' : 'none';
+  if (type !== 'weekend') document.getElementById('event-date-end-input').value = '';
 
   document.getElementById('event-location').value    = '';
   document.getElementById('event-time-from').value   = '';
@@ -1848,6 +1850,7 @@ const exportState = {
   tab: 'ical',          // 'ical' | 'pdf'
   persons: new Set(),   // selected person IDs for iCal
   months: new Set(),    // selected month numbers (1-12) for PDF
+  includePrep: true,    // include timeSetup/timeTeardown in export
 };
 
 function openExportModal() {
@@ -1873,7 +1876,7 @@ function renderExportModal() {
   const plan = state.plan;
   if (!plan) return;
   const { tab, persons, months } = exportState;
-  const activeTeam = plan.team.filter(m => m.active);
+  const activeTeam = plan.team.filter(m => m.active).slice().sort((a,b) => a.name.localeCompare(b.name));
   const year = plan.year;
 
   // Update tab buttons
@@ -1910,6 +1913,10 @@ function renderExportModal() {
           </div>
         </div>
         <div class="export-person-chips">${personChips}</div>
+      </div>
+      <div class="export-option-row">
+        <span class="export-option-label">Vor- und Nachbereitungszeit einschließen</span>
+        <button class="export-tog${exportState.includePrep ? ' on' : ''}" data-action="export-toggle-prep"></button>
       </div>`;
 
     const filename = `einsatzplan-${year}.ics`;
@@ -1956,6 +1963,10 @@ function renderExportModal() {
           </div>
         </div>
         <div class="export-month-grid">${monthItems}</div>
+      </div>
+      <div class="export-option-row">
+        <span class="export-option-label">Vor- und Nachbereitungszeit einschließen</span>
+        <button class="export-tog${exportState.includePrep ? ' on' : ''}" data-action="export-toggle-prep"></button>
       </div>`;
 
     const count = months.size;
@@ -1971,7 +1982,7 @@ async function doExportICal() {
   if (!plan) return;
   const personIDs = [...exportState.persons];
   try {
-    await Planner.ExportICal(personIDs);
+    await Planner.ExportICal(personIDs, exportState.includePrep);
     closeModal('modal-export');
     showToast('Kalender exportiert.', 'success');
   } catch (e) {
@@ -2019,7 +2030,9 @@ function doExportPDF() {
     const rows = allEvents.map(ev => {
       const d = new Date(ev.date + 'T00:00:00');
       const dayStr = `${WEEKDAY_SHORT[d.getDay()]} ${String(d.getDate()).padStart(2, '0')}.${String(m).padStart(2, '0')}.`;
-      const time = ev.timeFrom && ev.timeTo ? `${ev.timeFrom}–${ev.timeTo}` : '—';
+      const dispFrom = exportState.includePrep && ev.timeSetup ? ev.timeSetup : ev.timeFrom;
+      const dispTo   = exportState.includePrep && ev.timeTeardown ? ev.timeTeardown : ev.timeTo;
+      const time = dispFrom && dispTo ? `${dispFrom}–${dispTo}` : '—';
       const loc = ev.location || '—';
 
       if (ev.isClosed) {
@@ -2115,15 +2128,15 @@ function doExportPDF() {
     .p-divider { border-bottom: 2px solid #1a1a1a; }
     .p-table { width: 100%; border-collapse: collapse; margin-top: 4px; }
     .p-table th { font-size: 7.5pt; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #999; padding: 5px 8px 4px; border-bottom: 1px solid #ddd; text-align: left; }
-    .p-table td { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; vertical-align: top; font-size: 10pt; }
-    .p-note-row td { border-bottom: 1px solid #f0f0f0; padding-top: 0; }
+    .p-table td { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; font-size: 10pt; }
+    .p-note-row td { border-bottom: 1px solid #f0f0f0; padding: 3px 8px 7px 10px; vertical-align: middle; }
     .p-table tr:last-child td { border-bottom: none; }
     .p-date { font-weight: 600; white-space: nowrap; width: 84px; }
     .p-loc  { font-weight: 500; width: 140px; }
     .p-time { color: #555; white-space: nowrap; width: 90px; font-variant-numeric: tabular-nums; }
     .p-chip { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; white-space: nowrap; font-size: 9.5pt; }
     .p-dot  { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
-    .p-note-cell { font-size: 8.5pt; color: #777; padding-bottom: 6px; font-style: italic; }
+    .p-note-cell { font-size: 8.5pt; color: #888; padding-left: 4px; border-left: 2px solid #e0e0e0; font-style: italic; }
     .p-row-closed td { color: #bbb; }
     .p-closed-badge { font-size: 8pt; color: #b45309; font-style: italic; }
     .p-empty { color: #999; margin-top: 8px; font-size: 9.5pt; }
@@ -2167,7 +2180,7 @@ let _confirmResolve = null;
 function showConfirm({ kicker = '', title = '', message = '', okLabel = 'OK' } = {}) {
   document.getElementById('modal-confirm-kicker').textContent = kicker;
   document.getElementById('modal-confirm-title').textContent = title;
-  document.getElementById('modal-confirm-msg').innerHTML = message;
+  document.getElementById('modal-confirm-msg').textContent = message;
   document.getElementById('btn-modal-confirm-ok').textContent = okLabel;
   showModal('modal-confirm');
   return new Promise(resolve => { _confirmResolve = resolve; });
@@ -2292,7 +2305,7 @@ function applyTimePreset(index) {
 function populateStaffList(team, assigned) {
   const el = document.getElementById('event-staff-list');
   if (!el) return;
-  el.innerHTML = team.filter(m => m.active).map(m => {
+  el.innerHTML = team.filter(m => m.active).slice().sort((a,b) => a.name.localeCompare(b.name)).map(m => {
     const on = assigned.includes(m.id);
     return `<button type="button"
       class="staff-pick${on ? ' on' : ''}"
@@ -2443,6 +2456,11 @@ document.addEventListener('click', e => {
       renderExportModal();
       break;
     }
+    case 'export-toggle-prep':
+      exportState.includePrep = !exportState.includePrep;
+      renderExportModal();
+      break;
+
     case 'export-month-preset': {
       const now = new Date();
       const curMonth = state.plan?.year === now.getFullYear() ? now.getMonth() + 1 : 1;
@@ -2540,16 +2558,7 @@ async function handleExternalChange() {
     try {
       const plan = await Planner.ReloadPlan();
       if (!plan) return;
-      // Update state and sidebar metadata without navigating away.
-      state.plan = plan;
-      const teamName = plan.settings?.teamName;
-      document.getElementById('sidebar-team-name').textContent = teamName || 'Einsatzplan';
-      document.getElementById('sidebar-year-label').textContent = `Einsatzplan · ${plan.year}`;
-      document.title = `Einsatzplan ${plan.year}`;
-      setDirtyUI(false);
-      await refreshCurrentPage();
-      hideExternalChangeBanner();
-      showToast('Ansicht aktualisiert.', 'success');
+      await applyReloadedPlan(plan);
     } catch (e) {
       showToast('Fehler beim Aktualisieren: ' + e, 'error');
     }
@@ -2575,14 +2584,7 @@ document.getElementById('btn-reload-plan')?.addEventListener('click', async () =
   try {
     const plan = await Planner.ReloadPlan();
     if (!plan) return;
-    state.plan = plan;
-    const teamName = plan.settings?.teamName;
-    document.getElementById('sidebar-team-name').textContent = teamName || 'Einsatzplan';
-    document.getElementById('sidebar-year-label').textContent = `Einsatzplan · ${plan.year}`;
-    document.title = `Einsatzplan ${plan.year}`;
-    setDirtyUI(false);
-    await refreshCurrentPage();
-    showToast('Ansicht aktualisiert.', 'success');
+    await applyReloadedPlan(plan);
   } catch (e) {
     showToast('Fehler beim Neu laden: ' + e, 'error');
   }
@@ -2636,7 +2638,8 @@ document.getElementById('btn-modal-new-cancel')?.addEventListener('click',  () =
 document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); cmdSave(); }
   if (e.key === 'Escape') {
-    ['modal-event','modal-member','modal-location','modal-time','modal-new-year'].forEach(closeModal);
+    ['modal-event','modal-member','modal-location','modal-time','modal-new-year','modal-confirm'].forEach(closeModal);
+    if (_confirmResolve) { _confirmResolve(false); _confirmResolve = null; }
     const qa = document.getElementById('qa-popover');
     if (qa) qa.style.display = 'none';
   }
@@ -2650,7 +2653,11 @@ document.addEventListener('change', e => {
   if (el.dataset.action === 'save-team-name') {
     const s = { ...state.plan.settings, teamName: el.value };
     Planner.UpdateSettings(s)
-      .then(() => { state.plan.settings.teamName = el.value; setDirtyUI(true); })
+      .then(() => {
+        state.plan.settings.teamName = el.value;
+        updateSidebarMeta(state.plan);
+        setDirtyUI(true);
+      })
       .catch(err => showToast('Fehler: ' + err, 'error'));
     return;
   }
