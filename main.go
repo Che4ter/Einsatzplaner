@@ -17,6 +17,7 @@ var Version = "dev"
 // Embeds the built frontend. The plain (non-`all:`) form intentionally skips
 // files and directories whose names begin with "_" or "." — e.g. the
 // frontend/_tests/ unit tests, which must not ship in the binary.
+//
 //go:embed frontend
 var assets embed.FS
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/mod/semver"
+
+	"github.com/pkg/browser"
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"einsatzplaner/einsatzplan/domain"
@@ -47,6 +52,47 @@ func (s *PlannerService) SetVersion(v string) { s.version = v }
 
 // GetVersion returns the application version (e.g. "v1.2.3" or "dev").
 func (s *PlannerService) GetVersion() string { return s.version }
+
+// CheckForUpdate queries the GitHub releases API and returns the latest tag
+// name if it is strictly newer than the running version, or "" when already
+// up to date, running a dev build, or on any network/parse error.
+func (s *PlannerService) CheckForUpdate() string {
+	if s.version == "" || s.version == "dev" || !semver.IsValid(s.version) {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"https://api.github.com/repos/Che4ter/Einsatzplaner/releases/latest", nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var payload struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&payload); err != nil {
+		return ""
+	}
+	if semver.IsValid(payload.TagName) && semver.Compare(payload.TagName, s.version) > 0 {
+		return payload.TagName
+	}
+	return ""
+}
+
+// OpenURL opens the given URL in the system default browser.
+func (s *PlannerService) OpenURL(url string) {
+	_ = browser.OpenURL(url)
+}
 
 // ── File operations ──────────────────────────────────────────────────────────
 

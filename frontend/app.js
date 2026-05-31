@@ -2424,4 +2424,17 @@ Planner.GetVersion().then(v => {
   if (el) el.textContent = v;
 }).catch(() => {});
 
+Planner.CheckForUpdate().then(newTag => {
+  if (!newTag) return;
+  const link = document.getElementById('update-link');
+  if (!link) return;
+  link.textContent = 'Update verfügbar (' + newTag + ')';
+  const releaseURL = 'https://github.com/Che4ter/Einsatzplaner/releases/tag/' + encodeURIComponent(newTag);
+  link.style.display = '';
+  link.addEventListener('click', e => {
+    e.preventDefault();
+    Planner.OpenURL(releaseURL).catch(() => {});
+  });
+}).catch(() => {});
+
 tryRestoreLastFile();
