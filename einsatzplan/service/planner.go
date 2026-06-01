@@ -803,14 +803,15 @@ func (s *PlannerService) DeleteMember(ctx context.Context, memberID string) erro
 			continue
 		}
 		for i := range mo.Events {
+			if !slices.Contains(mo.Events[i].AssignedStaff, memberID) {
+				continue
+			}
 			mo.Events[i].AssignedStaff = slices.DeleteFunc(
 				mo.Events[i].AssignedStaff,
 				func(id string) bool { return id == memberID },
 			)
 			if s.isOnline {
-				ev := mo.Events[i]
-				monthCopy := month
-				s.cloudSaveEvent(monthCopy, ev)
+				s.cloudToggleStaff(mo.Events[i], memberID, domain.ActionUnassign)
 			}
 		}
 	}

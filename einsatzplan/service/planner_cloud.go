@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -128,13 +129,16 @@ func (s *PlannerService) SyncEventUpdate(_ context.Context, month int, ev domain
 	}
 
 	if isDelete {
-		for i, e := range mo.Events {
-			if e.ID == ev.ID {
-				mo.Events = append(mo.Events[:i], mo.Events[i+1:]...)
-				break
-			}
-		}
+		mo.Events = slices.DeleteFunc(mo.Events, func(e domain.Event) bool { return e.ID == ev.ID })
 	} else {
+		// Remove the event from any other month first — guards against a remote
+		// month-field change that would otherwise leave a stale copy behind.
+		for m, other := range s.plan.Months {
+			if m == month || other == nil {
+				continue
+			}
+			other.Events = slices.DeleteFunc(other.Events, func(e domain.Event) bool { return e.ID == ev.ID })
+		}
 		found := false
 		for i, e := range mo.Events {
 			if e.ID == ev.ID {

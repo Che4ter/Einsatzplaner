@@ -135,6 +135,21 @@ export async function connectToCloud(roomCode, year) {
       // them apart by checking whether the room root doc exists; that check happens
       // only when meta is missing so we don't add a read on normal connects.
       let metaMissingChecked = false;
+      let settled = false;
+
+      // Reject once and clean up all listeners so the promise doesn't hang.
+      function rejectOnce(err) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(connectTimer);
+        currentUnsubscribes.forEach(u => u());
+        currentUnsubscribes = [];
+        reject(err);
+      }
+
+      // 15 s connect timeout — guards against silent listener failures where
+      // neither the next nor the error callback fires (e.g. SDK hangs).
+      const connectTimer = setTimeout(() => rejectOnce(new Error('Verbindungs-Timeout')), 15000);
 
       const unsubMeta = onSnapshot(metaRef, { includeMetadataChanges: false }, (docSnap) => {
         if (docSnap.exists()) {
@@ -156,10 +171,7 @@ export async function connectToCloud(roomCode, year) {
             // A deleted room has no room doc; a new plan simply has no meta yet.
             getDocFromServer(doc(db, `rooms/${roomCode}`)).then(roomSnap => {
               if (!roomSnap.exists()) {
-                // Room is gone — unsubscribe and reject so callers can show an error.
-                currentUnsubscribes.forEach(u => u());
-                currentUnsubscribes = [];
-                reject(new Error('Raum nicht gefunden'));
+                rejectOnce(new Error('Raum nicht gefunden'));
               } else {
                 // Room exists but has no plan for this year yet — valid for bootstrap.
                 metaLoaded = true;
@@ -172,7 +184,7 @@ export async function connectToCloud(roomCode, year) {
             });
           }
         }
-      });
+      }, (err) => rejectOnce(err));
       currentUnsubscribes.push(unsubMeta);
 
       const unsubEvents = onSnapshot(eventsRef, { includeMetadataChanges: false }, (snapshot) => {
@@ -182,6 +194,8 @@ export async function connectToCloud(roomCode, year) {
             ev.assignedStaff = ev.assignedStaff || [];
             if (ev.month >= 1 && ev.month <= 12) {
               initialPlan.months[ev.month].events.push(ev);
+            } else {
+              console.warn('connectToCloud: event has out-of-range month, skipped', ev.id, ev.month);
             }
           });
           eventsLoaded = true;
@@ -200,11 +214,13 @@ export async function connectToCloud(roomCode, year) {
             }
           });
         }
-      });
+      }, (err) => rejectOnce(err));
       currentUnsubscribes.push(unsubEvents);
 
       async function checkInitialLoad() {
         if (metaLoaded && eventsLoaded) {
+          clearTimeout(connectTimer);
+          settled = true;
           const resolved = await SyncFullPlan(initialPlan);
           await ConnectCloud(roomCode, year); // must complete before resolving so Go's isOnline=true is visible to callers
           resolve(resolved);
@@ -226,31 +242,51 @@ export async function connectToCloud(roomCode, year) {
 // promise; normal event-handler callers should fire-and-forget.
 
 export function dbSaveEvent(month, ev) {
-  if (!db || !currentRoomCode || !currentYear) return Promise.resolve();
+  if (!db || !currentRoomCode || !currentYear) {
+    if (db) console.warn('dbSaveEvent: missing room context — write dropped', { currentRoomCode, currentYear });
+    return Promise.resolve();
+  }
   const eventRef = doc(db, `rooms/${currentRoomCode}/plans/${currentYear}/events/${ev.id}`);
   // Strip assignedStaff — concurrent staff toggles use atomic arrayUnion/arrayRemove
   // (dbAssignStaff/dbUnassignStaff) and a full overwrite here would clobber them.
   const { assignedStaff: _omit, ...rest } = ev;
-  return setDoc(eventRef, JSON.parse(JSON.stringify({ ...rest, month })), { merge: true });
+  // Use merge:true so assignedStaff (managed separately) is preserved server-side.
+  // Optional fields that are absent/empty must be explicitly deleted so that a
+  // previously set value (e.g. dateEnd, comment) is cleared rather than left stale.
+  const OPTIONAL_FIELDS = ['dateEnd', 'comment', 'timeSetup', 'timeTeardown'];
+  const payload = { ...JSON.parse(JSON.stringify(rest)), month };
+  for (const field of OPTIONAL_FIELDS) {
+    if (payload[field] === '' || payload[field] == null) payload[field] = deleteField();
+  }
+  return setDoc(eventRef, payload, { merge: true });
 }
 
 // Bootstrap-only: write a complete event document including assignedStaff.
 // Only safe to call during initial plan creation when no other clients are
 // connected yet. Normal mutations must use dbSaveEvent + dbAssignStaff/dbUnassignStaff.
 export function dbSaveEventFull(month, ev) {
-  if (!db || !currentRoomCode || !currentYear) return Promise.resolve();
+  if (!db || !currentRoomCode || !currentYear) {
+    if (db) console.warn('dbSaveEventFull: missing room context — write dropped', { currentRoomCode, currentYear });
+    return Promise.resolve();
+  }
   const eventRef = doc(db, `rooms/${currentRoomCode}/plans/${currentYear}/events/${ev.id}`);
   return setDoc(eventRef, JSON.parse(JSON.stringify({ ...ev, month })));
 }
 
 export function dbDeleteEvent(eventId) {
-  if (!db || !currentRoomCode || !currentYear) return Promise.resolve();
+  if (!db || !currentRoomCode || !currentYear) {
+    if (db) console.warn('dbDeleteEvent: missing room context — write dropped', { currentRoomCode, currentYear });
+    return Promise.resolve();
+  }
   const eventRef = doc(db, `rooms/${currentRoomCode}/plans/${currentYear}/events/${eventId}`);
   return deleteDoc(eventRef);
 }
 
 export function dbSaveMeta(metaData) {
-  if (!db || !currentRoomCode || !currentYear) return Promise.resolve();
+  if (!db || !currentRoomCode || !currentYear) {
+    if (db) console.warn('dbSaveMeta: missing room context — write dropped', { currentRoomCode, currentYear });
+    return Promise.resolve();
+  }
   const metaRef = doc(db, `rooms/${currentRoomCode}/plans/${currentYear}/meta/data`);
   const team = Array.isArray(metaData.team)
     ? Object.fromEntries(metaData.team.map(m => [m.id, m]))
@@ -262,26 +298,41 @@ export function dbSaveMeta(metaData) {
 // Write a single team member into the meta doc's `team` map field.
 // Only the fields for this one member are touched — other members are unaffected.
 export function dbSaveMember(member) {
-  if (!db || !currentRoomCode || !currentYear) return Promise.resolve();
+  if (!db || !currentRoomCode || !currentYear) {
+    if (db) console.warn('dbSaveMember: missing room context — write dropped', { currentRoomCode, currentYear });
+    return Promise.resolve();
+  }
   const metaRef = doc(db, `rooms/${currentRoomCode}/plans/${currentYear}/meta/data`);
   const pureData = JSON.parse(JSON.stringify(member));
-  // Dot-notation key: Firestore writes only meta.team.<id>, leaving all other
-  // team entries and the settings field completely untouched.
-  return updateDoc(metaRef, { [`team.${member.id}`]: pureData });
+  // setDoc + merge:true writes only meta.team.<id>, leaving other team entries
+  // and settings untouched, AND creates the meta doc if it doesn't exist yet
+  // (updateDoc would reject with "no document to update" when connecting to a
+  // room whose year has no meta doc — see the bootstrap path in connectToCloud).
+  return setDoc(metaRef, { team: { [member.id]: pureData } }, { merge: true });
 }
 
 // Remove a single team member from the meta doc's `team` map.
 export function dbDeleteMember(memberId) {
-  if (!db || !currentRoomCode || !currentYear) return Promise.resolve();
+  if (!db || !currentRoomCode || !currentYear) {
+    if (db) console.warn('dbDeleteMember: missing room context — write dropped', { currentRoomCode, currentYear });
+    return Promise.resolve();
+  }
   const metaRef = doc(db, `rooms/${currentRoomCode}/plans/${currentYear}/meta/data`);
-  return updateDoc(metaRef, { [`team.${memberId}`]: deleteField() });
+  // setDoc + merge:true so a delete against a not-yet-created meta doc is a
+  // harmless no-op rather than an "no document to update" rejection.
+  return setDoc(metaRef, { team: { [memberId]: deleteField() } }, { merge: true });
 }
 
 // Write only the settings portion of the meta doc, leaving team untouched.
 export function dbSaveSettings(settings) {
-  if (!db || !currentRoomCode || !currentYear) return Promise.resolve();
+  if (!db || !currentRoomCode || !currentYear) {
+    if (db) console.warn('dbSaveSettings: missing room context — write dropped', { currentRoomCode, currentYear });
+    return Promise.resolve();
+  }
   const metaRef = doc(db, `rooms/${currentRoomCode}/plans/${currentYear}/meta/data`);
-  return updateDoc(metaRef, { settings: JSON.parse(JSON.stringify(settings)) });
+  // setDoc + merge:true creates-or-updates so settings can be saved even when
+  // the meta doc was not created yet (year exists in room but has no plan).
+  return setDoc(metaRef, { settings: JSON.parse(JSON.stringify(settings)) }, { merge: true });
 }
 
 export function dbAppendActivity(entry) {
@@ -300,13 +351,19 @@ export function dbAddYearToRoom(roomCode, year) {
 
 // Atomic helpers: use arrayUnion/arrayRemove to avoid overwriting concurrent changes
 export function dbAssignStaff(eventId, userId) {
-  if (!db || !currentRoomCode || !currentYear) return Promise.resolve();
+  if (!db || !currentRoomCode || !currentYear) {
+    if (db) console.warn('dbAssignStaff: missing room context — write dropped', { currentRoomCode, currentYear });
+    return Promise.resolve();
+  }
   const eventRef = doc(db, `rooms/${currentRoomCode}/plans/${currentYear}/events/${eventId}`);
   return updateDoc(eventRef, { assignedStaff: arrayUnion(userId) });
 }
 
 export function dbUnassignStaff(eventId, userId) {
-  if (!db || !currentRoomCode || !currentYear) return Promise.resolve();
+  if (!db || !currentRoomCode || !currentYear) {
+    if (db) console.warn('dbUnassignStaff: missing room context — write dropped', { currentRoomCode, currentYear });
+    return Promise.resolve();
+  }
   const eventRef = doc(db, `rooms/${currentRoomCode}/plans/${currentYear}/events/${eventId}`);
   return updateDoc(eventRef, { assignedStaff: arrayRemove(userId) });
 }

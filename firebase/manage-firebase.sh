@@ -14,6 +14,9 @@
 #   export-room  <ROOM_CODE>   Export a single room to a local JSON file.
 #   import-room  <FILE>        Import a previously-exported room JSON file.
 #   delete-room  <ROOM_CODE>   Delete all data under a room (irreversible!).
+#   revoke-room  <ROOM_CODE>   Rotate the room code: copy data to a new UUID,
+#                              then delete the old room. Share the new code with
+#                              all users to invalidate the old bearer secret.
 #
 # Requirements:
 #   npm install -g firebase-tools
@@ -213,6 +216,119 @@ PYEOF
     echo "Room ${ROOM} deleted."
     ;;
 
+  revoke-room)
+    # Rotating the bearer secret: copy all room data to a new UUID, then delete
+    # the old room. After this operation, share the new code with all legitimate
+    # users — the old code becomes a dead path (room doc gone).
+    require_cmd curl
+    require_cmd python3
+    require_cmd firebase
+    require_cmd uuidgen
+    [ -z "${ARG1}" ] && die "Usage: $0 <PROJECT_ID> revoke-room <OLD_ROOM_CODE>"
+    OLD_ROOM="${ARG1}"
+    NEW_ROOM=$(uuidgen | tr '[:upper:]' '[:lower:]')
+    echo "Revoking room code '${OLD_ROOM}'."
+    echo "New room code will be: ${NEW_ROOM}"
+    printf "Confirm you want to rotate (type 'yes'): "
+    read -r CONFIRM
+    [ "${CONFIRM}" = "yes" ] || die "Aborted."
+
+    TOKEN=$(firebase_token)
+    BASE="$(fs_url)"
+    TMPFILE="room-revoke-tmp-${OLD_ROOM}.json"
+
+    echo "Step 1/3: Exporting old room..."
+    python3 - "${BASE}" "${TOKEN}" "${OLD_ROOM}" "${TMPFILE}" <<'PYEOF'
+import sys, json
+from urllib.request import urlopen, Request
+from urllib.error import HTTPError
+
+base, token, room, outfile = sys.argv[1:]
+headers = {"Authorization": f"Bearer {token}"}
+
+def get_all(url):
+    docs = []
+    while url:
+        req = Request(url, headers=headers)
+        try:
+            with urlopen(req) as r:
+                data = json.load(r)
+        except HTTPError as e:
+            sys.exit(f"HTTP {e.code} fetching {url}")
+        docs.extend(data.get("documents", []))
+        npt = data.get("nextPageToken")
+        url = (url.split("?")[0] + "?pageSize=300&pageToken=" + npt) if npt else None
+    return docs
+
+result = {"room": room, "plans": {}}
+plans_url = f"{base}/rooms/{room}/plans?pageSize=100"
+plan_docs = get_all(plans_url)
+for pd in plan_docs:
+    year = pd["name"].split("/")[-1]
+    plan_data = {}
+    for coll in ("meta", "events", "activity"):
+        plan_data[coll] = get_all(f"{base}/rooms/{room}/plans/{year}/{coll}?pageSize=500")
+    result["plans"][year] = plan_data
+
+with open(outfile, "w") as f:
+    json.dump(result, f, indent=2)
+print(f"  Exported {len(result['plans'])} year(s).")
+PYEOF
+
+    echo "Step 2/3: Importing data under new room code ${NEW_ROOM}..."
+    python3 - "${BASE}" "${TOKEN}" "${TMPFILE}" "${NEW_ROOM}" <<'PYEOF'
+import sys, json
+from urllib.request import urlopen, Request
+from urllib.error import HTTPError
+
+base, token, infile, new_room = sys.argv[1:]
+headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+with open(infile) as f:
+    data = json.load(f)
+
+# Write the room root doc with years list first.
+years = list(data["plans"].keys())
+room_url = f"{base}/rooms/{new_room}"
+room_body = json.dumps({"fields": {"years": {"arrayValue": {"values": [{"integerValue": y} for y in years]}}}}).encode()
+req = Request(room_url, data=room_body, headers=headers, method="PATCH")
+try:
+    with urlopen(req): pass
+except HTTPError as e:
+    sys.exit(f"HTTP {e.code} writing room root doc")
+
+total = 0
+for year, plan in data["plans"].items():
+    for coll in ("meta", "events", "activity"):
+        for doc in plan.get(coll, []):
+            doc_id = doc["name"].split("/")[-1]
+            url = f"{base}/rooms/{new_room}/plans/{year}/{coll}/{doc_id}"
+            body = json.dumps({"fields": doc.get("fields", {})}).encode()
+            req = Request(url, data=body, headers=headers, method="PATCH")
+            try:
+                with urlopen(req): pass
+                total += 1
+            except HTTPError as e:
+                print(f"  Warning: HTTP {e.code} writing {url}", file=sys.stderr)
+print(f"  Imported {total} document(s).")
+PYEOF
+
+    echo "Step 3/3: Deleting old room ${OLD_ROOM}..."
+    firebase firestore:delete \
+      --project "${PROJECT}" \
+      --recursive \
+      --yes \
+      "/rooms/${OLD_ROOM}"
+
+    rm -f "${TMPFILE}"
+    echo ""
+    echo "Done. Room code rotated successfully."
+    echo "  Old (revoked): ${OLD_ROOM}"
+    echo "  New (active):  ${NEW_ROOM}"
+    echo ""
+    echo "Share the new code with all users. The old code is now invalid."
+    ;;
+
   help|-h|--help)
     cat <<'EOF'
 manage-firebase.sh — Manage Firestore rules and room data for Einsatzplaner
@@ -227,6 +343,8 @@ Commands:
   export-room  <ROOM_CODE>   Export a single room's plans to a JSON backup file.
   import-room  <FILE>        Restore a room from a previously-exported JSON file.
   delete-room  <ROOM_CODE>   Permanently delete all data under a room.
+  revoke-room  <ROOM_CODE>   Rotate the room code (new UUID), copy all data,
+                             delete old room. Use when a code is compromised.
 
 Examples:
   ./firebase/manage-firebase.sh my-project-id deploy
@@ -234,11 +352,13 @@ Examples:
   ./firebase/manage-firebase.sh my-project-id export-room xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
   ./firebase/manage-firebase.sh my-project-id import-room room-export-xxxx.json
   ./firebase/manage-firebase.sh my-project-id delete-room xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  ./firebase/manage-firebase.sh my-project-id revoke-room xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 Requirements:
   npm install -g firebase-tools
   firebase login
-  python3 (for export/import)
+  python3 (for export/import/revoke)
+  uuidgen  (for revoke-room; available on Linux/macOS by default)
 EOF
     ;;
 

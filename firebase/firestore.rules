@@ -7,37 +7,57 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Helper: validate room code is a proper UUID v4 (36 chars, correct format).
+    // The room code is a bearer capability — anyone who holds it has full access
+    // to that room. Guessing is infeasible (122 bits of entropy), but we still
+    // enforce the UUID shape to prevent junk-key room creation.
+    function isValidRoomCode(code) {
+      return code.matches(
+        '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+      );
+    }
+
     // Deny listing rooms (prevents enumeration of room codes).
     match /rooms/{roomCode} {
       allow list: if false;
-      allow read: if roomCode.size() == 36;
+      allow read: if isValidRoomCode(roomCode);
       // Allow modifying the years array and nothing else
-      allow write: if roomCode.size() == 36 
-                   && request.resource.data.keys().hasOnly(['years']);
+      allow write: if isValidRoomCode(roomCode)
+                   && request.resource.data.keys().hasOnly(['years'])
+                   && request.resource.data.years.size() < 50;
     }
 
-    // Meta document (settings + team): full read/write, locked shape.
+    // Meta document (settings + team): full read/write, locked shape and size.
     match /rooms/{roomCode}/plans/{year}/meta/{doc} {
-      allow read: if roomCode.size() == 36;
-      allow write: if roomCode.size() == 36
-                   && request.resource.data.keys().hasAny(['settings', 'team', 'version', 'year']);
+      allow read: if isValidRoomCode(roomCode);
+      allow write: if isValidRoomCode(roomCode)
+                   && request.resource.data.keys().hasOnly(['settings', 'team', 'version', 'year'])
+                   // Cap team size. Guarded with 'team in ...' because partial writes
+                   // (dbSaveSettings) produce a merged doc that may legitimately omit
+                   // the field on the patch; an unconditional .size() would deny them.
+                   && (!('team'    in request.resource.data) || request.resource.data.team.size() < 200)
+                   && (!('version' in request.resource.data) || request.resource.data.version is int)
+                   && (!('year'    in request.resource.data) || request.resource.data.year is int);
     }
 
     // Event documents: partial update allowed.
     match /rooms/{roomCode}/plans/{year}/events/{eventId} {
-      allow read: if roomCode.size() == 36;
+      allow read: if isValidRoomCode(roomCode);
       // Validate that only expected fields are passed and nothing more:
-      allow write: if roomCode.size() == 36 
-                   && request.resource.data.keys().hasAny(['month', 'id', 'type', 'date', 'dateEnd', 'isClosed', 'location', 'timeFrom', 'timeTo', 'timeSetup', 'timeTeardown', 'staffRequired', 'assignedStaff', 'comment'])
+      allow write: if isValidRoomCode(roomCode)
+                   && request.resource.data.keys().hasOnly(['month', 'id', 'type', 'date', 'dateEnd', 'isClosed', 'location', 'timeFrom', 'timeTo', 'timeSetup', 'timeTeardown', 'staffRequired', 'assignedStaff', 'comment'])
                    // Prevent heavy abusive string inserts:
-                   && (!('comment' in request.resource.data) || request.resource.data.comment.size() < 2000)
-                   && (!('location' in request.resource.data) || request.resource.data.location.size() < 300);
+                   && (!('comment'  in request.resource.data) || request.resource.data.comment.size()  < 2000)
+                   && (!('location' in request.resource.data) || request.resource.data.location.size() < 300)
+                   && (!('id'       in request.resource.data) || request.resource.data.id.size()       < 100)
+                   && request.resource.data.assignedStaff.size() < 200;
     }
 
-    // Activity log: append-only.
+    // Activity log: append-only, bounded entry size.
     match /rooms/{roomCode}/plans/{year}/activity/{entryId} {
-      allow read: if roomCode.size() == 36;
-      allow create: if roomCode.size() == 36;
+      allow read:   if isValidRoomCode(roomCode);
+      allow create: if isValidRoomCode(roomCode)
+                    && request.resource.data.size() < 20;
     }
   }
 }

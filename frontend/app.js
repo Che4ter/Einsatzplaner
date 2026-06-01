@@ -2749,6 +2749,12 @@ async function doConnect() {
     return;
   }
 
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!UUID_RE.test(roomCode)) {
+    if (errEl) { errEl.textContent = 'Ungültiger Zugangscode (kein gültiges UUID-Format).'; errEl.style.display = ''; }
+    return;
+  }
+
   try {
     // Probe the room for available years (year=0 → no Go-side commit yet)
     const plan = await FirebaseSync.connectToCloud(roomCode, 0);
@@ -2931,8 +2937,8 @@ Events.On('plan:cloud-disconnected', async () => {
 
 document.getElementById('btn-connect')?.addEventListener('click', openConnectModal);
 document.getElementById('btn-welcome-cloud')?.addEventListener('click', openConnectModal);
-document.getElementById('btn-modal-connect-close')?.addEventListener('click',  () => closeModal('modal-connect'));
-document.getElementById('btn-modal-connect-cancel')?.addEventListener('click', () => closeModal('modal-connect'));
+document.getElementById('btn-modal-connect-close')?.addEventListener('click',  () => { FirebaseSync.disconnectFromCloud(); closeModal('modal-connect'); });
+document.getElementById('btn-modal-connect-cancel')?.addEventListener('click', () => { FirebaseSync.disconnectFromCloud(); closeModal('modal-connect'); });
 document.getElementById('btn-modal-connect-confirm')?.addEventListener('click', doConnect);
 document.getElementById('btn-load-cloud-year')?.addEventListener('click', doLoadCloudYear);
 document.getElementById('btn-disconnect')?.addEventListener('click', doDisconnect);
@@ -3041,7 +3047,7 @@ if (confirmBtn) {
 
 // Escape key: include cloud modal
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeModal('modal-connect');
+  if (e.key === 'Escape') { FirebaseSync.disconnectFromCloud(); closeModal('modal-connect'); }
 }, { capture: false });
 
 Planner.GetVersion().then(v => {
