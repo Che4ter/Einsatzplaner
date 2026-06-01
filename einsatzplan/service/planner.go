@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/mod/semver"
 
+	"github.com/google/uuid"
 	"github.com/pkg/browser"
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -39,6 +40,12 @@ type PlannerService struct {
 	version     string
 	loadedMtime time.Time          // mtime of file when last loaded or saved
 	pollCancel  context.CancelFunc // stops the background file-change poller
+
+	// Cloud sync fields — set by SetCloudCredentials / ConnectCloud.
+	firestoreProjectID string
+	firestoreAPIKey    string
+	isOnline           bool
+	cloudRoomCode      string
 }
 
 // NewPlannerService constructs the service with the given dependencies.
@@ -136,9 +143,10 @@ func (s *PlannerService) PickTemplateFile(ctx context.Context) (string, error) {
 }
 
 // CreatePlanFromTemplate creates a blank plan for year but pre-fills Settings
-// and Team from the JSON file at templatePath. The user is then prompted for a
-// save location via a native Save-As dialog.
-func (s *PlannerService) CreatePlanFromTemplate(ctx context.Context, year int, templatePath string) (*domain.YearPlan, error) {
+// and Team from the JSON file at templatePath.  When includeEvents is true the
+// events are also copied with their year adjusted to year.  The user is then
+// prompted for a save location via a native Save-As dialog.
+func (s *PlannerService) CreatePlanFromTemplate(ctx context.Context, year int, templatePath string, includeEvents bool) (*domain.YearPlan, error) {
 	tmpl, err := s.store.Load(templatePath)
 	if err != nil {
 		return nil, fmt.Errorf("Vorlage laden: %w", err)
@@ -149,6 +157,10 @@ func (s *PlannerService) CreatePlanFromTemplate(ctx context.Context, year int, t
 	// Deep-copy team slice so we don't share memory with the template.
 	plan.Team = make([]domain.TeamMember, len(tmpl.Team))
 	copy(plan.Team, tmpl.Team)
+
+	if includeEvents {
+		copyEventsFromTemplate(tmpl, plan, year)
+	}
 
 	path, err := s.showSaveDialog(fmt.Sprintf("einsatzplan-%d.json", year), plan)
 	if err != nil {
@@ -167,6 +179,36 @@ func (s *PlannerService) CreatePlanFromTemplate(ctx context.Context, year int, t
 	}
 	s.restartPoller(path)
 	return storage.CopyPlan(s.plan), nil
+}
+
+// copyEventsFromTemplate copies all events from src into dst, adjusting the
+// year in each event's date fields and assigning fresh IDs.
+func copyEventsFromTemplate(src, dst *domain.YearPlan, year int) {
+	yearStr := fmt.Sprintf("%04d", year)
+	for month := 1; month <= 12; month++ {
+		srcMo := src.Months[month]
+		dstMo := dst.Months[month]
+		if srcMo == nil || dstMo == nil {
+			continue
+		}
+		for _, ev := range srcMo.Events {
+			ev.ID = uuid.New().String()
+			// Replace only the year component (first 4 chars) of YYYY-MM-DD.
+			if len(ev.Date) >= 4 {
+				ev.Date = yearStr + ev.Date[4:]
+			}
+			if len(ev.DateEnd) >= 4 {
+				ev.DateEnd = yearStr + ev.DateEnd[4:]
+			}
+			// Team IDs are copied from the template alongside events so
+			// existing assignments remain valid in the new plan.
+			if ev.AssignedStaff == nil {
+				ev.AssignedStaff = []string{}
+			}
+			ev.IsClosed = false
+			dstMo.Events = append(dstMo.Events, ev)
+		}
+	}
 }
 
 // OpenPlan shows a native open dialog, loads and returns the plan.
@@ -308,7 +350,7 @@ func (s *PlannerService) GetCurrentFileName(_ context.Context) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.path == "" {
-		return ""
+		return "" // cloud mode or no file open — let the caller use plan.year
 	}
 	return filepath.Base(s.path)
 }
@@ -432,13 +474,20 @@ func (s *PlannerService) CreateEvent(ctx context.Context, month int, ev domain.E
 		ev.AssignedStaff = []string{}
 	}
 	s.plan.Months[month].Events = append(s.plan.Months[month].Events, ev)
-	appendActivity(s.plan, domain.ActivityEntry{
+	activityEntry := domain.ActivityEntry{
 		ID:     generateID(),
 		At:     timestamp(),
 		Action: domain.ActionCreate,
 		Target: targetFrom(month, ev),
-	})
-	s.markDirty()
+	}
+	appendActivity(s.plan, activityEntry)
+	if s.isOnline {
+		evCopy := ev
+		s.cloudSaveEvent(month, evCopy)
+		s.cloudAppendActivity(activityEntry)
+	} else {
+		s.markDirty()
+	}
 	return ev.ID, nil
 }
 
@@ -517,17 +566,25 @@ func (s *PlannerService) UpdateEvent(ctx context.Context, month int, ev domain.E
 			entry.Action = domain.ActionReopen
 		}
 		appendActivity(s.plan, entry)
-		s.markDirty()
+		if s.isOnline {
+			evCopy := ev
+			s.cloudSaveEvent(month, evCopy)
+			s.cloudAppendActivity(entry)
+		} else {
+			s.markDirty()
+		}
 		return nil
 	}
 
 	// Otherwise log one entry per changed field, in a stable order.
+	var fieldEntries []domain.ActivityEntry
 	addFieldEntry := func(field, from, to string) {
 		entry := newEditEntry()
 		entry.Field = field
 		entry.From = from
 		entry.To = to
 		appendActivity(s.plan, entry)
+		fieldEntries = append(fieldEntries, entry)
 	}
 	if old.Type != ev.Type {
 		addFieldEntry("type", old.Type, ev.Type)
@@ -550,7 +607,18 @@ func (s *PlannerService) UpdateEvent(ctx context.Context, month int, ev domain.E
 	if old.Comment != ev.Comment {
 		addFieldEntry("comment", old.Comment, ev.Comment)
 	}
-	s.markDirty()
+	if s.isOnline {
+		evCopy := ev
+		s.cloudSaveEvent(month, evCopy)
+		for _, e := range staffEntries {
+			s.cloudAppendActivity(e)
+		}
+		for _, e := range fieldEntries {
+			s.cloudAppendActivity(e)
+		}
+	} else {
+		s.markDirty()
+	}
 	return nil
 }
 
@@ -571,13 +639,19 @@ func (s *PlannerService) DeleteEvent(ctx context.Context, month int, eventID str
 	}
 	ev := events[idx]
 	s.plan.Months[month].Events = slices.Delete(events, idx, idx+1)
-	appendActivity(s.plan, domain.ActivityEntry{
+	delEntry := domain.ActivityEntry{
 		ID:     generateID(),
 		At:     timestamp(),
 		Action: domain.ActionDelete,
 		Target: targetFrom(month, ev),
-	})
-	s.markDirty()
+	}
+	appendActivity(s.plan, delEntry)
+	if s.isOnline {
+		s.cloudDeleteEvent(eventID)
+		s.cloudAppendActivity(delEntry)
+	} else {
+		s.markDirty()
+	}
 	return nil
 }
 
@@ -608,14 +682,20 @@ func (s *PlannerService) ToggleStaff(ctx context.Context, month int, eventID, me
 	} else {
 		ev.AssignedStaff = append(ev.AssignedStaff, memberID)
 	}
-	appendActivity(s.plan, domain.ActivityEntry{
+	toggleEntry := domain.ActivityEntry{
 		ID:     generateID(),
 		At:     timestamp(),
 		Action: action,
 		Target: targetFrom(month, *ev),
 		Person: memberID,
-	})
-	s.markDirty()
+	}
+	appendActivity(s.plan, toggleEntry)
+	if s.isOnline {
+		s.cloudToggleStaff(*ev, memberID, action)
+		s.cloudAppendActivity(toggleEntry)
+	} else {
+		s.markDirty()
+	}
 	return slices.Clone(ev.AssignedStaff), nil
 }
 
@@ -633,7 +713,11 @@ func (s *PlannerService) CreateMember(ctx context.Context, m domain.TeamMember) 
 	}
 	m.ID = generateID()
 	s.plan.Team = append(s.plan.Team, m)
-	s.markDirty()
+	if s.isOnline {
+		s.cloudSaveMember(m)
+	} else {
+		s.markDirty()
+	}
 	return m.ID, nil
 }
 
@@ -652,7 +736,11 @@ func (s *PlannerService) UpdateMember(ctx context.Context, m domain.TeamMember) 
 		return fmt.Errorf("member %q not found", m.ID)
 	}
 	s.plan.Team[idx] = m
-	s.markDirty()
+	if s.isOnline {
+		s.cloudSaveMember(m)
+	} else {
+		s.markDirty()
+	}
 	return nil
 }
 
@@ -668,7 +756,11 @@ func (s *PlannerService) ToggleMemberActive(ctx context.Context, memberID string
 		return fmt.Errorf("member %q not found", memberID)
 	}
 	s.plan.Team[idx].Active = !s.plan.Team[idx].Active
-	s.markDirty()
+	if s.isOnline {
+		s.cloudSaveMember(s.plan.Team[idx])
+	} else {
+		s.markDirty()
+	}
 	return nil
 }
 
@@ -684,7 +776,11 @@ func (s *PlannerService) ToggleMemberExcludeHours(ctx context.Context, memberID 
 		return fmt.Errorf("member %q not found", memberID)
 	}
 	s.plan.Team[idx].ExcludeFromHours = !s.plan.Team[idx].ExcludeFromHours
-	s.markDirty()
+	if s.isOnline {
+		s.cloudSaveMember(s.plan.Team[idx])
+	} else {
+		s.markDirty()
+	}
 	return nil
 }
 
@@ -711,9 +807,18 @@ func (s *PlannerService) DeleteMember(ctx context.Context, memberID string) erro
 				mo.Events[i].AssignedStaff,
 				func(id string) bool { return id == memberID },
 			)
+			if s.isOnline {
+				ev := mo.Events[i]
+				monthCopy := month
+				s.cloudSaveEvent(monthCopy, ev)
+			}
 		}
 	}
-	s.markDirty()
+	if s.isOnline {
+		s.cloudDeleteMember(memberID)
+	} else {
+		s.markDirty()
+	}
 	return nil
 }
 
@@ -727,7 +832,11 @@ func (s *PlannerService) UpdateSettings(ctx context.Context, settings domain.Set
 		return err
 	}
 	s.plan.Settings = settings
-	s.markDirty()
+	if s.isOnline {
+		s.cloudSaveSettings()
+	} else {
+		s.markDirty()
+	}
 	return nil
 }
 
@@ -792,7 +901,7 @@ func (s *PlannerService) eventsForFilter(month int) []domain.Event {
 	return slices.Clone(s.plan.Months[month].Events)
 }
 
-func (s *PlannerService) loadFromPath(ctx context.Context, path string) (*domain.YearPlan, error) {
+func (s *PlannerService) loadFromPath(_ context.Context, path string) (*domain.YearPlan, error) {
 	plan, err := s.store.Load(path)
 	if err != nil {
 		return nil, err
@@ -991,4 +1100,18 @@ func (s *PlannerService) ExportICal(ctx context.Context, personIDs []string, inc
 		path += ".ics"
 	}
 	return os.WriteFile(path, []byte(content), 0600)
+}
+// RemoveRecentPath removes a path from the recent list.
+func (s *PlannerService) RemoveRecentPath(_ context.Context, path string) {
+        if path == "" {
+                return
+        }
+        paths := loadRecentPaths()
+        var newPaths []string
+        for _, p := range paths {
+                if p != path {
+                        newPaths = append(newPaths, p)
+                }
+        }
+        saveRecentPaths(newPaths)
 }

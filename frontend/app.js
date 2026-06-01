@@ -15,6 +15,7 @@ import {
   renderEventCard, renderClosedCard, renderActivityEntry,
   fmtDayHeading, renderQAPopover,
 } from './render.js';
+import * as FirebaseSync from './firebaseSync.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 2. STATE
@@ -502,7 +503,7 @@ function renderSettingsPage(plan) {
             <input class="dlg-input" type="text" id="settings-team-name"
               value="${esc(settings.teamName)}" placeholder="z.B. Mobile Spielanimation" data-action="save-team-name">
           </div>
-          <div class="dlg-field" style="margin-top:16px;display:flex;align-items:center;justify-content:space-between">
+          ${state.online ? '' : `<div class="dlg-field" style="margin-top:16px;display:flex;align-items:center;justify-content:space-between">
             <div>
               <div class="dlg-label" style="margin-bottom:0">Automatisch speichern</div>
               <div class="dlg-hint">Änderungen werden nach ${AUTOSAVE_DELAY_MS / 1000} Sekunden automatisch gespeichert.</div>
@@ -511,7 +512,7 @@ function renderSettingsPage(plan) {
               <input type="checkbox" id="settings-autosave" ${autosaveChecked} data-action="toggle-autosave">
               <span class="toggle-track"></span>
             </label>
-          </div>
+          </div>`}
         </div>
       </div>
 
@@ -930,6 +931,9 @@ function showPage(id) {
 }
 
 function setDirtyUI(isDirty) {
+  // In cloud/online mode the save pill is managed by applyCloudStatus ("Cloud · live").
+  // Never let local dirty/saved text overwrite it.
+  if (state.online) return;
   state.dirty = isDirty;
   const pill  = document.getElementById('save-state');
   const label = document.getElementById('save-state-label');
@@ -978,7 +982,7 @@ async function onPlanLoaded(plan) {
   document.getElementById('sb-filename').textContent = plan.year;
   setDirtyUI(false);
   Planner.GetCurrentFileName().then(name => {
-    if (name) document.getElementById('sb-filename').textContent = name;
+    if (name && name !== '.') document.getElementById('sb-filename').textContent = name;
   }).catch(() => {});
 
   // Enable nav buttons
@@ -1232,7 +1236,6 @@ async function confirmEventModal() {
     if (location && !(state.plan.settings.locations ?? []).includes(location)) {
       const newSettings = { ...state.plan.settings, locations: [...(state.plan.settings.locations ?? []), location] };
       await Planner.UpdateSettings(newSettings);
-      state.plan.settings = newSettings;
     }
     state.plan = await Planner.GetPlan();
     closeModal('modal-event');
@@ -1343,8 +1346,8 @@ async function confirmMemberModal() {
     } else {
       await Planner.CreateMember({ id: '', name, color: _memberColor, active: true, excludeFromHours });
     }
-    state.plan = await Planner.GetPlan();
     closeModal('modal-member');
+    state.plan = await Planner.GetPlan();
     setDirtyUI(true);
     await showSettingsPage();
   } catch (e) {
@@ -1401,7 +1404,7 @@ async function confirmLocationModal() {
   const s = { ...state.plan.settings, locations: locs };
   try {
     await Planner.UpdateSettings(s);
-    state.plan.settings = s;
+    state.plan = await Planner.GetPlan();
     closeModal('modal-location');
     setDirtyUI(true);
     await showSettingsPage();
@@ -1416,7 +1419,7 @@ async function deleteLocation(index) {
   const s = { ...state.plan.settings, locations: locs };
   try {
     await Planner.UpdateSettings(s);
-    state.plan.settings = s;
+    state.plan = await Planner.GetPlan();
     setDirtyUI(true);
     await showSettingsPage();
   } catch (e) {
@@ -1465,7 +1468,7 @@ async function confirmTimeModal() {
   const s = { ...state.plan.settings, defaultTimes: times };
   try {
     await Planner.UpdateSettings(s);
-    state.plan.settings = s;
+    state.plan = await Planner.GetPlan();
     closeModal('modal-time');
     setDirtyUI(true);
     await showSettingsPage();
@@ -1480,7 +1483,7 @@ async function deleteTime(index) {
   const s = { ...state.plan.settings, defaultTimes: times };
   try {
     await Planner.UpdateSettings(s);
-    state.plan.settings = s;
+    state.plan = await Planner.GetPlan();
     setDirtyUI(true);
     await showSettingsPage();
   } catch (e) {
@@ -1505,8 +1508,9 @@ async function tryRestoreLastFile() {
       row.innerHTML = `
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         <div style="flex:1;min-width:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:500;color:var(--ink)" title="${esc(path)}">${esc(name)}</div>
-        <button class="dlg-btn primary btn-sm">Öffnen</button>`;
-      row.querySelector('button').addEventListener('click', async () => {
+        <button class="dlg-btn danger btn-sm action-rem" title="Entfernen">&times;</button>
+        <button class="dlg-btn primary btn-sm action-open">Öffnen</button>`;
+      row.querySelector('.action-open').addEventListener('click', async () => {
         try {
           const plan = await Planner.ReopenPlan(path);
           if (plan) await onPlanLoaded(plan);
@@ -1514,13 +1518,160 @@ async function tryRestoreLastFile() {
           showToast('Datei nicht mehr gefunden.', 'error');
         }
       });
+      row.querySelector('.action-rem').addEventListener('click', async () => {
+        try {
+          await Planner.RemoveRecentPath(path);
+          tryRestoreLastFile();
+        } catch { /* ignore */ }
+      });
       list.appendChild(row);
     }
     container.style.display = '';
   } catch { /* ignore */ }
 }
 
-// ── New year modal ────────────────────────────────────────────────────────────
+// Render recent cloud connections on the welcome screen.
+// Entries are grouped by room code so multiple years under the same code
+// appear as one card with per-year "Laden" buttons.
+function renderWelcomeCloudRecent() {
+  const recent = getRecentRooms();
+  const container = document.getElementById('welcome-cloud-recent');
+  const list = document.getElementById('welcome-cloud-recent-list');
+  if (!container || !list) return;
+  if (recent.length === 0) { container.style.display = 'none'; return; }
+
+  // Group by code (preserve insertion order = most-recent first per code)
+  const byCode = new Map();
+  recent.forEach(r => {
+    if (!byCode.has(r.code)) byCode.set(r.code, { code: r.code, years: [] });
+    if (r.year && !byCode.get(r.code).years.includes(r.year)) byCode.get(r.code).years.push(r.year);
+  });
+
+  list.innerHTML = '';
+  const rowsByCode = new Map();
+
+  byCode.forEach(({ code, years }) => {
+    const shortCode = code.slice(0, 8) + '…';
+    const sortedYears = years.slice().sort((a, b) => b - a);
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 8px 8px 12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);transition:border-color 120ms,opacity 200ms';
+    row.addEventListener('mouseenter', () => { if (!row._ghosted) row.style.borderColor = 'var(--line-strong)'; });
+    row.addEventListener('mouseleave', () => { if (!row._ghosted) row.style.borderColor = 'var(--line)'; });
+
+    // Cloud dot indicator
+    const dot = document.createElement('span');
+    dot.style.cssText = 'flex-shrink:0;width:7px;height:7px;border-radius:50%;background:var(--teal);opacity:0.55;margin-right:2px';
+    row.appendChild(dot);
+
+    // Truncated code
+    const label = document.createElement('span');
+    label.title = code;
+    label.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-family:var(--font-mono);color:var(--muted);letter-spacing:0.02em';
+    label.textContent = shortCode;
+    row.appendChild(label);
+
+    // Year chips
+    const chipsWrap = document.createElement('div');
+    chipsWrap.style.cssText = 'display:flex;gap:4px;flex-shrink:0';
+    if (sortedYears.length > 0) {
+      sortedYears.forEach(year => {
+        const chip = document.createElement('button');
+        chip.dataset.yearChip = '1';
+        chip.style.cssText = 'font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--teal-soft);color:var(--teal);border:1px solid transparent;cursor:pointer;transition:background 120ms,border-color 120ms,opacity 120ms';
+        chip.textContent = String(year);
+        chip.addEventListener('mouseenter', () => { if (!chip.disabled) { chip.style.background = '#cde3df'; chip.style.borderColor = 'var(--teal)'; } });
+        chip.addEventListener('mouseleave', () => { if (!chip.disabled) { chip.style.background = 'var(--teal-soft)'; chip.style.borderColor = 'transparent'; } });
+        chip.addEventListener('click', async () => {
+          chip.disabled = true;
+          chip.style.opacity = '0.5';
+          chip.textContent = '…';
+          try {
+            const plan = await FirebaseSync.connectToCloud(code, year);
+            if (plan) {
+              addRecentRoom(code, plan.year ?? year);
+              await onPlanLoaded(plan);
+              applyCloudStatus(await Planner.GetCloudStatus());
+              showToast(`Team-Plan ${year} geladen.`, 'success');
+            } else {
+              const inp = document.getElementById('connect-room-code');
+              if (inp) inp.value = code;
+              showModal('modal-connect');
+            }
+          } catch (e) {
+            const msg = String(e);
+            if (msg.includes('nicht gefunden') || msg.includes('not-found') || msg.includes('permission')) {
+              applyGhostedState(row);
+              showToast('Dieser Team-Plan existiert nicht mehr.', 'error');
+            } else {
+              showToast('Verbindung fehlgeschlagen: ' + e, 'error');
+              chip.disabled = false;
+              chip.style.opacity = '';
+              chip.textContent = String(year);
+            }
+          }
+        });
+        chipsWrap.appendChild(chip);
+      });
+    } else {
+      const openBtn = document.createElement('button');
+      openBtn.dataset.yearChip = '1';
+      openBtn.style.cssText = 'font-size:12px;font-weight:500;color:var(--teal);background:none;border:none;cursor:pointer;white-space:nowrap;padding:2px 4px';
+      openBtn.textContent = 'Verbinden…';
+      openBtn.addEventListener('click', () => {
+        const inp = document.getElementById('connect-room-code');
+        if (inp) inp.value = code;
+        showModal('modal-connect');
+      });
+      chipsWrap.appendChild(openBtn);
+    }
+    row.appendChild(chipsWrap);
+
+    // Remove ×
+    const remBtn = document.createElement('button');
+    remBtn.title = 'Aus Liste entfernen';
+    remBtn.style.cssText = 'flex-shrink:0;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:4px;color:var(--muted-2);font-size:15px;line-height:1;transition:color 120ms,background 120ms;margin-left:2px';
+    remBtn.textContent = '×';
+    remBtn.addEventListener('mouseenter', () => { remBtn.style.color = 'var(--rose)'; remBtn.style.background = 'var(--rose-soft)'; });
+    remBtn.addEventListener('mouseleave', () => { remBtn.style.color = 'var(--muted-2)'; remBtn.style.background = ''; });
+    remBtn.addEventListener('click', () => removeRecentRoom(code));
+    row.appendChild(remBtn);
+
+    list.appendChild(row);
+    rowsByCode.set(code, row);
+  });
+
+  container.style.display = '';
+
+  // Probe each room for server-side existence — always bypasses cache so
+  // deleted rooms are reliably detected.
+  rowsByCode.forEach((row, code) => {
+    FirebaseSync.checkRoomExists(code).then(exists => {
+      if (exists === false) applyGhostedState(row);
+    }).catch(() => {});
+  });
+}
+
+function applyGhostedState(row) {
+  if (row._ghosted) return; // idempotent
+  row._ghosted = true;
+  row.style.opacity = '0.55';
+  row.style.borderColor = 'var(--rose-soft)';
+  // Swap the teal dot for a rose dot
+  const dot = row.querySelector('span');
+  if (dot) { dot.style.background = 'var(--rose)'; dot.style.opacity = '0.7'; }
+  // Disable all year chips
+  row.querySelectorAll('[data-year-chip]').forEach(b => {
+    b.disabled = true;
+    b.style.pointerEvents = 'none';
+    b.style.opacity = '0.35';
+  });
+  // Insert "Gelöscht" badge before the × button
+  const badge = document.createElement('span');
+  badge.style.cssText = 'font-size:10px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:var(--rose);white-space:nowrap;flex-shrink:0;padding:2px 7px;border-radius:99px;background:var(--rose-soft)';
+  badge.textContent = 'Gelöscht';
+  row.insertBefore(badge, row.lastChild);
+}
 
 let _newYearTemplatePath = null;
 
@@ -1530,6 +1681,18 @@ function _resetNewYearModal() {
   if (lbl) lbl.textContent = 'Kein Vorlage gewählt';
   const preview = document.getElementById('template-preview');
   if (preview) { preview.style.display = 'none'; preview.textContent = ''; }
+  const evRow = document.getElementById('new-year-include-events-row');
+  if (evRow) evRow.style.display = 'none';
+  const evCb = document.getElementById('new-year-include-events');
+  if (evCb) evCb.checked = false;
+  const localRadio = document.getElementById('new-year-local');
+  if (localRadio) localRadio.checked = true;
+  const nyCodeRow = document.getElementById('new-year-cloud-code-row');
+  if (nyCodeRow) nyCodeRow.style.display = 'none';
+  const nyCodeInput = document.getElementById('new-year-room-code');
+  if (nyCodeInput) nyCodeInput.value = '';
+  const nyConnRow = document.getElementById('new-year-cloud-connected-row');
+  if (nyConnRow) nyConnRow.style.display = 'none';
 }
 
 async function pickTemplateFile() {
@@ -1541,6 +1704,8 @@ async function pickTemplateFile() {
     if (lbl) lbl.textContent = path.split('/').pop().split('\\').pop();
     const preview = document.getElementById('template-preview');
     if (preview) { preview.textContent = `Pfad: ${path}`; preview.style.display = 'block'; }
+    const evRow = document.getElementById('new-year-include-events-row');
+    if (evRow) evRow.style.display = '';
   } catch (e) {
     showToast('Fehler beim Auswählen: ' + e, 'error');
   }
@@ -1554,8 +1719,9 @@ async function confirmNewYear() {
   }
   try {
     let plan;
+    const includeEvents = document.getElementById('new-year-include-events')?.checked ?? false;
     if (_newYearTemplatePath) {
-      plan = await Planner.CreatePlanFromTemplate(year, _newYearTemplatePath);
+      plan = await Planner.CreatePlanFromTemplate(year, _newYearTemplatePath, includeEvents);
     } else {
       plan = await Planner.CreatePlan(year);
     }
@@ -1697,6 +1863,19 @@ function renderExportModal() {
     const count = months.size;
     document.getElementById('export-foot-filename').textContent = `einsatzplan-${year}.pdf · ${count} Seite${count !== 1 ? 'n' : ''}`;
     document.getElementById('btn-export-confirm').textContent = '↓ PDF herunterladen';
+  }
+
+  if (tab === 'json') {
+    bodyHtml = `
+      <div class="export-info-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        <div>
+          <strong>Vollständiger JSON-Export des aktuellen Plans.</strong>
+          <p>Lädt die komplette Datendatei herunter — kompatibel mit dem lokalen Dateiformat.</p>
+        </div>
+      </div>`;
+    document.getElementById('export-foot-filename').textContent = `einsatzplan-${year}.json`;
+    document.getElementById('btn-export-confirm').textContent = '↓ JSON herunterladen';
   }
 
   document.getElementById('export-body').innerHTML = bodyHtml;
@@ -2246,6 +2425,7 @@ function showExternalChangeBanner(hasDirty) {
 }
 
 function hideExternalChangeBanner() {
+  _autosavePaused = false;
   const banner = document.getElementById('external-change-banner');
   if (banner) banner.style.display = 'none';
 }
@@ -2327,6 +2507,7 @@ document.getElementById('nav-btn-year')?.addEventListener('click', () => {
 document.getElementById('btn-modal-export-close')?.addEventListener('click',  () => closeModal('modal-export'));
 document.getElementById('btn-modal-export-cancel')?.addEventListener('click', () => closeModal('modal-export'));
 document.getElementById('btn-export-confirm')?.addEventListener('click', () => {
+  if (exportState.tab === 'json') { doExportJSON(); return; }
   if (exportState.tab === 'ical') doExportICal();
   else doExportPDF();
 });
@@ -2366,9 +2547,10 @@ document.addEventListener('change', e => {
   if (el.dataset.action === 'save-team-name') {
     const s = { ...state.plan.settings, teamName: el.value };
     Planner.UpdateSettings(s)
-      .then(() => {
-        state.plan.settings.teamName = el.value;
-        updateSidebarMeta(state.plan);
+      .then(() => Planner.GetPlan())
+      .then(plan => {
+        state.plan = plan;
+        updateSidebarMeta(plan);
         setDirtyUI(true);
       })
       .catch(err => showToast('Fehler: ' + err, 'error'));
@@ -2419,9 +2601,462 @@ document.addEventListener('change', e => {
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 
+// Cloud state
+state.online = false;
+state.cloudRoomCode = '';
+
+/** Update UI elements that depend on cloud online state. */
+// ── Recent cloud rooms (localStorage) ────────────────────────────────────────
+
+function getRecentRooms() {
+  try { return JSON.parse(localStorage.getItem('recentCloudRooms') || '[]'); } catch { return []; }
+}
+function removeRecentRoom(roomCode) {
+  const rooms = getRecentRooms().filter(r => r.code !== roomCode);
+  try { localStorage.setItem('recentCloudRooms', JSON.stringify(rooms)); } catch {}
+  renderWelcomeCloudRecent();
+}
+
+function addRecentRoom(roomCode, year) {
+  // Store each code+year pair separately so we can show multiple years per code.
+  // Dedup on (code, year), then sort newest first and cap total entries at 10.
+  let rooms = getRecentRooms().filter(r => !(r.code === roomCode && r.year === year));
+  rooms.unshift({ code: roomCode, year, usedAt: new Date().toISOString() });
+  if (rooms.length > 10) rooms.length = 10;
+  try { localStorage.setItem('recentCloudRooms', JSON.stringify(rooms)); } catch {}
+  renderWelcomeCloudRecent();
+}
+
+function applyCloudStatus(status) {
+  state.online         = status.isOnline ?? false;
+  state.cloudRoomCode  = status.roomCode ?? '';
+  const btnConnect  = document.getElementById('btn-connect');
+  const badge       = document.getElementById('cloud-badge');
+  const btnSave     = document.getElementById('btn-save');
+  const pill        = document.getElementById('save-state');
+  const label       = document.getElementById('save-state-label');
+
+  // Show connect button only when cloud is configured in the binary
+  if (btnConnect) {
+    btnConnect.style.display = status.cloudEnabled ? '' : 'none';
+    btnConnect.classList.toggle('cloud-online', status.isOnline);
+  }
+  if (badge) {
+    badge.style.display = status.isOnline ? '' : 'none';
+    badge.title = status.isOnline ? `Verbunden · Zugangscode: ${status.roomCode}` : '';
+  }
+  // When online: hide save button (autosave not relevant — direct Firestore write)
+  if (btnSave) btnSave.style.display = status.isOnline ? 'none' : '';
+  if (status.isOnline && pill)  pill.classList.remove('dirty');
+  if (status.isOnline && label) label.textContent = 'Cloud · live';
+
+  // Show/hide cloud storage option in the new-year modal
+  // Cloud option is always visible when cloud is enabled (not just when online)
+  const cloudRow = document.getElementById('new-year-cloud-row');
+  if (cloudRow) cloudRow.style.display = status.cloudEnabled ? '' : 'none';
+
+  // Welcome screen cloud button
+  const btnWelcomeCloud = document.getElementById('btn-welcome-cloud');
+  if (btnWelcomeCloud) btnWelcomeCloud.style.display = status.cloudEnabled ? '' : 'none';
+
+  // New-year modal: update cloud sub-rows based on connection state
+  const nyCodeRow   = document.getElementById('new-year-cloud-code-row');
+  const nyConnRow   = document.getElementById('new-year-cloud-connected-row');
+  const nyCodeSpan  = document.getElementById('new-year-current-room-code');
+  const nyCloudRadio = document.getElementById('new-year-cloud');
+  const cloudSelected = nyCloudRadio?.checked ?? false;
+  if (status.isOnline) {
+    if (nyCodeRow) nyCodeRow.style.display = 'none';
+    if (nyConnRow) { nyConnRow.style.display = cloudSelected ? '' : 'none'; if (nyCodeSpan) nyCodeSpan.textContent = status.roomCode; }
+  } else {
+    if (nyCodeRow) nyCodeRow.style.display = cloudSelected ? '' : 'none';
+    if (nyConnRow) nyConnRow.style.display = 'none';
+  }
+
+  // Show/hide JSON export tab in export modal (available when online)
+  const jsonTab = document.getElementById('export-tab-json');
+  if (jsonTab) jsonTab.style.display = status.cloudEnabled ? '' : 'none';
+}
+
+// ── Cloud Connect modal ───────────────────────────────────────────────────────
+
+async function openConnectModal() {
+  const status = await Planner.GetCloudStatus().catch(() => null);
+  if (!status) return;
+
+  const statusSec  = document.getElementById('connect-status-section');
+  const formSec    = document.getElementById('connect-form-section');
+  const foot       = document.getElementById('connect-dlg-foot');
+  const activeCode = document.getElementById('connect-active-code');
+  const errEl      = document.getElementById('connect-error');
+  const yearRow    = document.getElementById('connect-year-row');
+
+  if (status.isOnline) {
+    statusSec.style.display = '';
+    formSec.style.display   = 'none';
+    foot.style.display      = 'none';
+    if (activeCode) activeCode.textContent = status.roomCode;
+  } else {
+    statusSec.style.display = 'none';
+    formSec.style.display   = '';
+    foot.style.display      = '';
+    if (errEl)     { errEl.style.display = 'none'; errEl.textContent = ''; }
+    if (yearRow)   yearRow.style.display = 'none';
+  }
+  // Render recently used rooms
+  const recSec  = document.getElementById('connect-recent-section');
+  const recList = document.getElementById('connect-recent-list');
+  if (recSec && recList) {
+    const recent = getRecentRooms();
+    if (recent.length > 0 && !status.isOnline) {
+      // Group by code
+      const byCode = new Map();
+      recent.forEach(r => {
+        if (!byCode.has(r.code)) byCode.set(r.code, { code: r.code, years: [] });
+        if (r.year && !byCode.get(r.code).years.includes(r.year)) byCode.get(r.code).years.push(r.year);
+      });
+      recList.innerHTML = '';
+      byCode.forEach(({ code, years }) => {
+        const sortedYears = years.slice().sort((a, b) => b - a);
+        const yearStr = sortedYears.length > 0 ? sortedYears.join(', ') : '?';
+        const btn = document.createElement('button');
+        btn.className = 'dlg-btn secondary';
+        btn.style.cssText = 'text-align:left;font-family:var(--font-mono);font-size:12px;padding:6px 10px';
+        btn.innerHTML = `${esc(code.substring(0, 8))}… <span style="color:var(--muted);font-weight:400">· ${esc(yearStr)}</span>`;
+        btn.addEventListener('click', () => {
+          const inp = document.getElementById('connect-room-code');
+          if (inp) inp.value = code;
+        });
+        recList.appendChild(btn);
+      });
+      recSec.style.display = '';
+    } else {
+      recSec.style.display = 'none';
+    }
+  }
+  showModal('modal-connect');
+}
+
+async function doConnect() {
+  const codeInput = document.getElementById('connect-room-code');
+  const errEl     = document.getElementById('connect-error');
+  const roomCode  = (codeInput?.value ?? '').trim();
+
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+  if (!roomCode) {
+    if (errEl) { errEl.textContent = 'Bitte einen Zugangscode eingeben.'; errEl.style.display = ''; }
+    return;
+  }
+
+  try {
+    // Probe the room for available years (year=0 → no Go-side commit yet)
+    const plan = await FirebaseSync.connectToCloud(roomCode, 0);
+
+    if (plan) {
+      // Shouldn't happen (year=0 always returns null) but handle defensively
+      addRecentRoom(roomCode, plan.year ?? 0);
+      closeModal('modal-connect');
+      await onPlanLoaded(plan);
+      showToast('Cloud verbunden.', 'success');
+      return;
+    }
+
+    // No plan yet — show year picker
+    const years = await FirebaseSync.getAvailableYears(roomCode).catch(() => []);
+    const yearRow    = document.getElementById('connect-year-row');
+    const yearSelect = document.getElementById('connect-year-select');
+    const foot       = document.getElementById('connect-dlg-foot');
+
+    foot.style.display = 'none';
+    yearRow.style.display = '';
+    yearSelect.innerHTML = '';
+    if (years.length > 0) {
+      years.sort((a, b) => b - a).forEach(y => {
+        const opt = document.createElement('option');
+        opt.value = y;
+        opt.textContent = y;
+        yearSelect.appendChild(opt);
+      });
+    }
+    const newOpt = document.createElement('option');
+    newOpt.value = 'new';
+    newOpt.textContent = '+ Neues Jahr';
+    yearSelect.appendChild(newOpt);
+
+  } catch (e) {
+    if (errEl) {
+      errEl.textContent = 'Verbindung fehlgeschlagen: ' + e;
+      errEl.style.display = '';
+    }
+  }
+}
+
+async function doLoadCloudYear() {
+  const yearSelect = document.getElementById('connect-year-select');
+  const val = yearSelect?.value;
+  if (!val) return;
+
+  if (val === 'new') {
+    closeModal('modal-connect');
+    _resetNewYearModal();
+    // Pre-select cloud storage
+    const cloudRadio = document.getElementById('new-year-cloud');
+    if (cloudRadio) cloudRadio.checked = true;
+    showModal('modal-new-year');
+    return;
+  }
+
+  const year = parseInt(val, 10);
+  try {
+    // Use the room code stored during the probe step (doConnect), not Go's state —
+    // ConnectCloud on the Go side hasn't been called yet at this point.
+    const roomCode = FirebaseSync.getLastProbedRoomCode() || (await Planner.GetCloudStatus()).roomCode;
+    const plan = await FirebaseSync.connectToCloud(roomCode, year);
+    closeModal('modal-connect');
+    if (plan) {
+      addRecentRoom(roomCode, year);
+      await onPlanLoaded(plan);
+      applyCloudStatus(await Planner.GetCloudStatus());
+      showToast(`Cloud-Plan ${year} geladen.`, 'success');
+    }
+  } catch (e) {
+    showToast('Fehler: ' + e, 'error');
+  }
+}
+
+async function doDisconnect() {
+  try {
+    FirebaseSync.disconnectFromCloud();
+    await Planner.DisconnectCloud();
+    const status = await Planner.GetCloudStatus();
+    applyCloudStatus(status);
+    closeModal('modal-connect');
+    showToast('Verbindung getrennt.', 'success');
+  } catch (e) {
+    showToast('Fehler: ' + e, 'error');
+  }
+}
+
+// ── Export JSON (cloud mode) ──────────────────────────────────────────────────
+
+async function doExportJSON() {
+  try {
+    const json = await Planner.ExportPlanJSON();
+    const year = state.plan?.year ?? 'plan';
+    const blob = new Blob([json], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `einsatzplan-${year}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    closeModal('modal-export');
+    showToast('JSON heruntergeladen.', 'success');
+  } catch (e) {
+    showToast('Export fehlgeschlagen: ' + e, 'error');
+  }
+}
+
+// ── Wails cloud events ────────────────────────────────────────────────────────
+
+// Each Events.On callback receives a WailsEvent object. .data holds the payload.
+// When Go emits multiple args, .data is an array; single arg → .data is the value.
+Events.On('cloud:save-event', (e) => {
+  const [month, ev] = e.data;
+  FirebaseSync.dbSaveEvent(month, ev).catch(err => showToast('Cloud-Speichern fehlgeschlagen: ' + err, 'error'));
+});
+Events.On('cloud:delete-event', (e) => {
+  FirebaseSync.dbDeleteEvent(e.data).catch(err => showToast('Cloud-Löschen fehlgeschlagen: ' + err, 'error'));
+});
+Events.On('cloud:save-settings', (e) => {
+  FirebaseSync.dbSaveSettings(e.data).catch(err => showToast('Cloud-Speichern fehlgeschlagen: ' + err, 'error'));
+});
+Events.On('cloud:save-member', (e) => {
+  FirebaseSync.dbSaveMember(e.data).catch(err => showToast('Cloud-Speichern fehlgeschlagen: ' + err, 'error'));
+});
+Events.On('cloud:delete-member', (e) => {
+  FirebaseSync.dbDeleteMember(e.data).catch(err => showToast('Cloud-Löschen fehlgeschlagen: ' + err, 'error'));
+});
+Events.On('cloud:append-activity', (e) => {
+  FirebaseSync.dbAppendActivity(e.data).catch(() => {});
+});
+Events.On('cloud:toggle-staff', (e) => {
+  const [eventId, memberId, assign] = e.data;
+  if (assign) FirebaseSync.dbAssignStaff(eventId, memberId).catch(err => showToast('Cloud-Speichern fehlgeschlagen: ' + err, 'error'));
+  else FirebaseSync.dbUnassignStaff(eventId, memberId).catch(err => showToast('Cloud-Speichern fehlgeschlagen: ' + err, 'error'));
+});
+
+Events.On('plan:cloud-meta-changed', async () => {
+  if (!state.plan) return;
+  try {
+    const plan = await Planner.GetPlan();
+    if (!plan) return;
+    state.plan = plan;
+    updateSidebarMeta(plan);
+    await refreshCurrentPage();
+  } catch (e) {
+    // non-fatal
+  }
+});
+
+Events.On('plan:cloud-event-changed', async (e) => {
+  if (!state.plan) return;
+  try {
+    const plan = await Planner.GetPlan();
+    if (!plan) return;
+    state.plan = plan;
+    const msg = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+    if (msg && msg.month) {
+      // Only re-render if we're currently viewing the affected month
+      if (state.currentPage === 'month' && state.currentMonth === msg.month) {
+        await navigateToMonth(msg.month);
+      } else {
+        // Update sidebar summaries
+        Planner.GetMonthSummaries().then(s => refreshSidebarSync(s)).catch(() => {});
+      }
+    }
+  } catch (e) {
+    // non-fatal
+  }
+});
+
+Events.On('plan:cloud-disconnected', async () => {
+  const status = await Planner.GetCloudStatus().catch(() => null);
+  if (status) applyCloudStatus(status);
+  showToast('Cloud-Verbindung getrennt.', 'warn');
+});
+
+// ── Wire new cloud modal buttons ──────────────────────────────────────────────
+
+document.getElementById('btn-connect')?.addEventListener('click', openConnectModal);
+document.getElementById('btn-welcome-cloud')?.addEventListener('click', openConnectModal);
+document.getElementById('btn-modal-connect-close')?.addEventListener('click',  () => closeModal('modal-connect'));
+document.getElementById('btn-modal-connect-cancel')?.addEventListener('click', () => closeModal('modal-connect'));
+document.getElementById('btn-modal-connect-confirm')?.addEventListener('click', doConnect);
+document.getElementById('btn-load-cloud-year')?.addEventListener('click', doLoadCloudYear);
+document.getElementById('btn-disconnect')?.addEventListener('click', doDisconnect);
+
+// Generate room code in new-year modal (cloud section)
+document.getElementById('btn-new-year-generate-code')?.addEventListener('click', async () => {
+  try {
+    const code = await Planner.GenerateRoomCode();
+    const inp = document.getElementById('new-year-room-code');
+    if (inp) inp.value = code;
+  } catch (e) { /* ignore */ }
+});
+
+// Show/hide cloud sub-rows when storage type changes in new-year modal
+document.getElementById('new-year-cloud')?.addEventListener('change', () => {
+  const codeRow = document.getElementById('new-year-cloud-code-row');
+  const connRow = document.getElementById('new-year-cloud-connected-row');
+  if (state.online) {
+    if (codeRow) codeRow.style.display = 'none';
+    if (connRow) { connRow.style.display = ''; const sp = document.getElementById('new-year-current-room-code'); if (sp) sp.textContent = state.cloudRoomCode; }
+  } else {
+    if (codeRow) codeRow.style.display = '';
+    if (connRow) connRow.style.display = 'none';
+  }
+});
+document.getElementById('new-year-local')?.addEventListener('change', () => {
+  const codeRow = document.getElementById('new-year-cloud-code-row');
+  if (codeRow) codeRow.style.display = 'none';
+  const connRow = document.getElementById('new-year-cloud-connected-row');
+  if (connRow) connRow.style.display = 'none';
+});
+
+// New-year modal confirm: handle cloud vs local
+async function confirmNewYearWithCloud() {
+  const cloudRadio = document.getElementById('new-year-cloud');
+  if (cloudRadio?.checked) {
+    const year = parseInt(document.getElementById('input-new-year').value, 10);
+    if (!year || year < 2020 || year > 2099) {
+      document.getElementById('input-new-year').style.borderColor = 'var(--rose)';
+      return;
+    }
+    // If not yet connected, use the room code entered in this modal.
+    let roomCode = state.cloudRoomCode ?? '';
+    if (!state.online) {
+      const codeInput = document.getElementById('new-year-room-code');
+      roomCode = (codeInput?.value ?? '').trim();
+    }
+    if (!roomCode) {
+      showToast('Bitte einen Raum-Code eingeben oder generieren.', 'error');
+      return;
+    }
+    const includeEvents = document.getElementById('new-year-include-events')?.checked ?? false;
+    const templatePath  = _newYearTemplatePath ?? '';
+    const confirmBtn2 = document.getElementById('btn-modal-new-confirm');
+    if (confirmBtn2) { confirmBtn2.disabled = true; confirmBtn2.textContent = 'Wird erstellt…'; }
+    try {
+      const plan = await Planner.CreateCloudPlan(year, roomCode, templatePath, includeEvents);
+      if (!plan) { if (confirmBtn2) { confirmBtn2.disabled = false; confirmBtn2.textContent = 'Erstellen & Speichern'; } return; }
+      if (roomCode && !state.online) addRecentRoom(roomCode, year);
+      
+      // Bootstrap Firestore: write meta+events BEFORE subscribing so that the
+      // onSnapshot listeners in connectToCloud see the full initial data and
+      // SyncFullPlan receives a complete plan rather than an empty skeleton.
+      FirebaseSync.setRoomContext(roomCode, year);
+      await FirebaseSync.dbAddYearToRoom(roomCode, year);
+      await FirebaseSync.dbSaveMeta({
+        settings: plan.settings || {},
+        team: plan.team || [],
+        version: plan.version || 1,
+        year: year,
+      });
+      if (plan.months) {
+        for (let m = 1; m <= 12; m++) {
+          if (plan.months[m]?.events) {
+            for (const ev of plan.months[m].events) {
+              // dbSaveEventFull preserves assignedStaff — safe here because no
+              // other clients are connected yet during initial plan creation.
+              await FirebaseSync.dbSaveEventFull(m, ev);
+            }
+          }
+        }
+      }
+      // Now subscribe — onSnapshot will fire with the data we just wrote.
+      await FirebaseSync.connectToCloud(roomCode, year);
+
+      closeModal('modal-new-year');
+      _resetNewYearModal();
+      await onPlanLoaded(plan);
+      applyCloudStatus(await Planner.GetCloudStatus().catch(() => ({})));
+      showToast(`Cloud-Jahresplan ${year} erstellt.`, 'success');
+    } catch (e) {
+      showToast('Fehler: ' + e, 'error');
+    } finally {
+      if (confirmBtn2) { confirmBtn2.disabled = false; confirmBtn2.textContent = 'Erstellen & Speichern'; }
+    }
+    return;
+  }
+  await confirmNewYear();
+}
+// Re-wire the new-year confirm button to the cloud-aware version.
+const confirmBtn = document.getElementById('btn-modal-new-confirm');
+if (confirmBtn) {
+  confirmBtn.removeEventListener('click', confirmNewYear);
+  confirmBtn.addEventListener('click', confirmNewYearWithCloud);
+}
+
+// Escape key: include cloud modal
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal('modal-connect');
+}, { capture: false });
+
 Planner.GetVersion().then(v => {
   const el = document.getElementById('sb-version');
   if (el) el.textContent = v;
+}).catch(() => {});
+
+// Boot cloud status — show connect button if cloud is configured
+Planner.GetCloudStatus().then(status => {
+  if (status.cloudEnabled) {
+    FirebaseSync.initFirebase(status.projectId, status.apiKey);
+  }
+  applyCloudStatus(status);
+  // Render after initFirebase so the existence probe has a live db connection.
+  renderWelcomeCloudRecent();
 }).catch(() => {});
 
 Planner.CheckForUpdate().then(newTag => {
@@ -2437,4 +3072,5 @@ Planner.CheckForUpdate().then(newTag => {
   });
 }).catch(() => {});
 
+// Only populate the recent lists — do NOT auto-open the last plan.
 tryRestoreLastFile();

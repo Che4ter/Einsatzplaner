@@ -23,6 +23,145 @@ Built with Go + Wails v3. Single binary, no install, runs on Linux and Windows.
 
 **iCal export** — export the schedule as a `.ics` file, either for the whole team or filtered to specific people, ready to import into any calendar app.
 
+**Cloud sync** — optionally sync your plan in real time via Firestore. Multiple people can work on the same plan simultaneously; changes appear live for all connected clients. See [Cloud sync](#cloud-sync) below.
+
+---
+
+## Cloud sync
+
+Cloud sync is an **optional** feature that must be enabled at build time by injecting a Firebase project ID and API key. Binaries built without these values run in local-only mode and show no cloud UI.
+
+### How it works
+
+- Each team gets a **room code** — a private UUID v4 you generate and share. Anyone with the same code and a cloud-enabled binary can read and write the plan.
+- Every mutation (event create/update/delete, staff toggle, settings change) is written directly to Firestore as a granular document update, keeping bandwidth and free-tier usage low.
+- A real-time watch stream (Firestore Listen API) pushes incremental changes back to all connected clients instantly.
+- The room code is the only secret. The Firebase API key is safe to embed in a public binary — it only identifies the project, not the user.
+
+### Using the hosted instance
+
+A hosted cloud instance is available baked into published releases. To connect:
+
+1. Click **Connect** in the sidebar
+2. Click **Generate Code** to create a new room code (or paste an existing one shared by a colleague)
+3. Click **Verbinden**, then create or select a year
+
+> **Disclaimer — free hobby project**
+>
+> The hosted Firestore backend is provided as a free, best-effort service for small teams.
+> I reserve the right to remove individual rooms, suspend access for specific teams, or
+> shut down the service entirely at any time and without prior notice.
+> Export your plan regularly using the **Export → JSON** option so you always have a local copy.
+> If you need a guaranteed, independent setup, host your own Firebase project (see below).
+
+---
+
+## Self-hosting: set up your own Firebase project
+
+Follow these steps to run the cloud sync against your own Firebase project, independent of any hosted instance.
+
+### 1. Create the project
+
+1. Go to <https://console.firebase.google.com> → **Add project**
+2. Give it a name, disable Google Analytics if you don't need it
+3. Sidebar: **Build → Firestore Database → Create database**
+   - Choose **production mode**
+   - Pick a region (e.g. `europe-west1`)
+
+### 2. Get your credentials
+
+You need two values:
+
+| Value | Where to find it |
+|---|---|
+| **Project ID** | Shown in the Firebase console URL: `.../project/<PROJECT_ID>/...` and on the project overview page |
+| **Web API Key** | **Project Settings** (gear icon top-left) → **General** tab → **Web API Key** field at the top of the page |
+
+> You do **not** need to register a Web App — the Web API Key is always visible on the General settings page.
+
+### 3. Deploy the security rules
+
+```sh
+# Install Firebase CLI (once)
+npm install -g firebase-tools
+firebase login
+
+# Deploy the rules bundled with this repo
+./firebase/manage-firebase.sh <PROJECT_ID>
+```
+
+All Firebase-related files live in the [`firebase/`](firebase/) directory:
+
+| File | Purpose |
+|---|---|
+| `firebase/firestore.rules` | Firestore security rules |
+| `firebase/firebase.json` | Firebase project config (rules pointer) |
+| `firebase/manage-firebase.sh` | Management CLI (deploy, list rooms, backup, …) |
+
+The rules in [`firebase/firestore.rules`](firebase/firestore.rules) enforce:
+- Rooms **cannot be listed** — prevents enumeration of room codes
+- Only a client that knows the exact 36-character UUID room code can read or write that room's data
+- Activity log entries can be created but **not deleted or overwritten**
+
+#### `manage-firebase.sh` commands
+
+```sh
+# Show help
+./firebase/manage-firebase.sh help
+
+# Deploy rules (default command)
+./firebase/manage-firebase.sh <PROJECT_ID>
+./firebase/manage-firebase.sh <PROJECT_ID> deploy-rules
+
+# List all room codes in the project
+./firebase/manage-firebase.sh <PROJECT_ID> list-rooms
+
+# Export a room's plans to a local JSON backup
+./firebase/manage-firebase.sh <PROJECT_ID> export-room <ROOM_CODE>
+
+# Restore a room from a backup
+./firebase/manage-firebase.sh <PROJECT_ID> import-room room-export-<ROOM_CODE>.json
+
+# Permanently delete a room (prompts for confirmation)
+./firebase/manage-firebase.sh <PROJECT_ID> delete-room <ROOM_CODE>
+```
+
+### 4. Build with your credentials
+
+Pass the values via `-ldflags` at build time:
+
+```sh
+# Development build
+go build \
+  -ldflags "-X main.FirestoreProjectID=<PROJECT_ID> -X main.FirestoreAPIKey=<API_KEY>" \
+  -o bin/einsatzplaner .
+
+# Production build (Linux)
+go build -tags production \
+  -ldflags "-w -s -X main.Version=v1.0.0 -X main.FirestoreProjectID=<PROJECT_ID> -X main.FirestoreAPIKey=<API_KEY>" \
+  -o bin/einsatzplaner .
+
+# Production build (Windows cross-compile from Linux)
+GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc \
+  go build -tags production \
+  -ldflags "-w -s -X main.Version=v1.0.0 -X main.FirestoreProjectID=<PROJECT_ID> -X main.FirestoreAPIKey=<API_KEY>" \
+  -o bin/einsatzplaner.exe .
+```
+
+Binaries built **without** the ldflags show no Connect button and behave as a pure local app.
+
+### Free-tier limits (Firebase Spark plan)
+
+| Operation | Daily limit |
+|---|---|
+| Reads | 50,000 |
+| Deletes | 20,000 |
+| Writes | 20,000 |
+
+For a small team with one or two active plans this is effectively unlimited in normal use. The built-in reconnect budget (max 8 reconnects per 5-minute window, exponential back-off) prevents runaway usage on flaky connections.
+
+---
+
 ## Development
 
 ```bash
@@ -35,6 +174,11 @@ go run github.com/wailsapp/wails/v3/cmd/wails3 generate bindings -b
 
 # Build and run (frontend served live from disk)
 go build -o bin/einsatzplaner . && ./bin/einsatzplaner
+
+# Build and run with cloud sync enabled (development)
+go build \
+  -ldflags "-X main.FirestoreProjectID=<PROJECT_ID> -X main.FirestoreAPIKey=<API_KEY>" \
+  -o bin/einsatzplaner . && ./bin/einsatzplaner
 ```
 
 Frontend changes (HTML/CSS/JS) are picked up immediately without rebuilding.

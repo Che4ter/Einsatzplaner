@@ -8,9 +8,19 @@
        restricted to same-origin (app.js + the Wails runtime); inline styles are
        required because the UI interpolates colours into style attributes. -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+    content="default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.googleapis.com https://*.google.com https://*.firebaseio.com wss://*.firebaseio.com wss://*.googleapis.com; object-src 'none'; base-uri 'self'; form-action 'none'">
   <title>Einsatzplan</title>
   <link rel="stylesheet" href="style.css">
+  
+  <script type="importmap">
+    {
+      "imports": {
+        "firebase/app": "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js"
+      }
+    }
+  </script>
+  
   <!-- Wails v3 runtime — injected by the asset server -->
   <script src="/wails/runtime.js?v=20260519"></script>
 </head>
@@ -40,6 +50,11 @@
       <button class="sb-tool" id="btn-export" title="Kalender &amp; Druck exportieren">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         Export
+      </button>
+      <button class="sb-tool" id="btn-connect" title="Mit Cloud verbinden" style="display:none">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+        Cloud
+        <span class="cloud-badge" id="cloud-badge" style="display:none">✓</span>
       </button>
     </div>
 
@@ -116,10 +131,15 @@
           <div class="welcome-actions">
             <button class="dlg-btn primary" id="btn-welcome-new">Neues Jahr erstellen</button>
             <button class="dlg-btn secondary" id="btn-welcome-open">Datei öffnen</button>
+            <button class="dlg-btn secondary" id="btn-welcome-cloud" style="display:none">Cloud verbinden</button>
           </div>
           <div id="welcome-reopen" style="display:none;max-width:380px;width:100%">
             <div style="font-size:12px;color:var(--muted);margin-bottom:6px;text-align:left">Zuletzt geöffnet</div>
             <div id="welcome-reopen-list" style="display:flex;flex-direction:column;gap:6px"></div>
+          </div>
+          <div id="welcome-cloud-recent" style="display:none;max-width:380px;width:100%">
+            <div style="font-size:12px;color:var(--muted);margin-bottom:6px;text-align:left">Zuletzt verbundene Team-Pläne</div>
+            <div id="welcome-cloud-recent-list" style="display:flex;flex-direction:column;gap:6px"></div>
           </div>
         </div>
       </div>
@@ -177,6 +197,11 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
         PDF zum Drucken
         <span class="export-tab-badge">A4</span>
+      </button>
+      <button class="export-tab" data-action="export-tab" data-tab="json" id="export-tab-json" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        JSON Export
+        <span class="export-tab-badge">JSON</span>
       </button>
     </div>
     <div class="export-body" id="export-body">
@@ -437,19 +462,119 @@
         <div class="dlg-label">Jahr</div>
         <input class="dlg-input" type="number" id="input-new-year" min="2020" max="2099" value="2026">
       </div>
-      <div class="dlg-field" style="margin-top:16px">
+      <!-- Cloud storage toggle: only shown when cloud is enabled -->
+      <div class="dlg-field" id="new-year-cloud-row" style="display:none;margin-top:16px">
+        <div class="dlg-label">Speicherort</div>
+        <div style="display:flex;gap:8px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="new-year-storage" value="local" id="new-year-local" checked>
+            <span style="font-size:14px">Lokal</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="new-year-storage" value="cloud" id="new-year-cloud">
+            <span style="font-size:14px">Cloud</span>
+          </label>
+        </div>
+        <!-- Zugangscode input: shown when Cloud is selected and not yet connected -->
+        <div id="new-year-cloud-code-row" style="display:none;margin-top:12px">
+          <div class="dlg-label">Zugangscode</div>
+          <div style="display:flex;gap:8px">
+            <input class="dlg-input" type="text" id="new-year-room-code"
+              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              style="flex:1;font-family:var(--font-mono);font-size:13px">
+            <button class="dlg-btn secondary" id="btn-new-year-generate-code" type="button">Neu generieren</button>
+          </div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px">Teile diesen Code mit deinem Team — damit können sie sich verbinden.</div>
+        </div>
+        <!-- Already-connected display -->
+        <div id="new-year-cloud-connected-row" style="display:none;margin-top:12px;font-size:13px;color:var(--text-muted)">
+          Zugangscode: <span id="new-year-current-room-code" style="font-family:var(--font-mono)"></span>
+        </div>
+      </div>
+      <div class="dlg-field" id="new-year-template-row" style="margin-top:16px">
         <div class="dlg-label">Einstellungen übernehmen (optional)</div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button class="dlg-btn secondary" id="btn-pick-template" type="button">Vorlage wählen…</button>
           <span id="template-file-label" style="font-size:13px;color:var(--text-muted);word-break:break-all">Kein Vorlage gewählt</span>
         </div>
         <div id="template-preview" style="display:none;margin-top:8px;font-size:13px;color:var(--text-muted)"></div>
+        <div id="new-year-include-events-row" style="display:none;margin-top:8px">
+          <div class="dlg-field" style="display:flex;align-items:center;justify-content:space-between;margin-top:0">
+            <div class="dlg-label" style="margin-bottom:0">Eins&auml;tze aus Vorlage &uuml;bernehmen</div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="new-year-include-events">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+        </div>
       </div>
     </div>
     <div class="dlg-foot">
       <div class="dlg-foot-left"></div>
       <button class="dlg-btn secondary" id="btn-modal-new-cancel">Abbrechen</button>
       <button class="dlg-btn primary" id="btn-modal-new-confirm">Erstellen &amp; Speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Modal: Cloud Connect ──────────────────────────────── -->
+<div class="modal-backdrop hidden" id="modal-connect">
+  <div class="modal" role="dialog" aria-modal="true" style="max-width:520px">
+    <div class="dlg-head">
+      <div>
+        <div class="dlg-kicker">Echtzeit-Synchronisation</div>
+        <div class="dlg-date" style="font-size:24px">Cloud verbinden</div>
+      </div>
+      <button class="dlg-close" id="btn-modal-connect-close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="dlg-body" id="connect-body">
+      <!-- Status section: shown when already connected -->
+      <div id="connect-status-section" style="display:none;margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:8px;padding:12px;background:var(--surface-alt,#f0fdf4);border-radius:8px;border:1px solid var(--green,#22c55e)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--green,#22c55e)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;flex-shrink:0"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+          <span style="font-size:14px">Verbunden — <span id="connect-active-code" style="font-family:var(--font-mono);font-size:13px"></span></span>
+        </div>
+        <button class="dlg-btn secondary" id="btn-disconnect" style="margin-top:12px;width:100%">Verbindung trennen</button>
+      </div>
+
+      <!-- Connect form: shown when not connected -->
+      <div id="connect-form-section">
+        <p style="font-size:14px;color:var(--text-muted);margin-bottom:16px">
+          Gib deinen Zugangscode ein, um dich mit einem bestehenden Team-Plan zu verbinden.
+        </p>
+        <div class="dlg-field">
+          <div class="dlg-label">Zugangscode</div>
+          <input class="dlg-input" type="text" id="connect-room-code"
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+            style="width:100%;font-family:var(--font-mono);font-size:13px">
+          <div id="connect-code-hint" style="font-size:12px;color:var(--text-muted);margin-top:4px">
+            Den Zugangscode erhältst du von der Person, die den Plan erstellt hat.
+          </div>
+        </div>
+        <!-- Recently used rooms -->
+        <div id="connect-recent-section" style="display:none;margin-top:16px">
+          <div class="dlg-label" style="margin-bottom:6px">Zuletzt verwendet</div>
+          <div id="connect-recent-list" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+
+        <!-- Year picker (shown after successful connect-without-year) -->
+        <div class="dlg-field" id="connect-year-row" style="display:none;margin-top:12px">
+          <div class="dlg-label">Jahr laden</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select class="dlg-input" id="connect-year-select" style="width:120px"></select>
+            <button class="dlg-btn primary" id="btn-load-cloud-year" type="button">Laden</button>
+          </div>
+        </div>
+
+        <div id="connect-error" style="display:none;font-size:13px;color:var(--danger,#ef4444);margin-top:8px;padding:8px 12px;background:var(--danger-bg,#fef2f2);border-radius:6px"></div>
+      </div>
+    </div>
+    <div class="dlg-foot" id="connect-dlg-foot">
+      <div class="dlg-foot-left"></div>
+      <button class="dlg-btn secondary" id="btn-modal-connect-cancel">Abbrechen</button>
+      <button class="dlg-btn primary" id="btn-modal-connect-confirm">Verbinden</button>
     </div>
   </div>
 </div>

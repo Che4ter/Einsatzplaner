@@ -64,7 +64,16 @@ jobs:
         run: wails3 generate bindings -b -d frontend/bindings
 
       - name: Build
-        run: go build -tags production -ldflags="-w -s -X main.Version=${{ github.ref_name }}" -o bin/einsatzplaner .
+        env:
+          FIRESTORE_PROJECT_ID: ${{ secrets.FIRESTORE_PROJECT_ID }}
+          FIRESTORE_API_KEY: ${{ secrets.FIRESTORE_API_KEY }}
+        run: |
+          go build -tags production \
+            -ldflags="-w -s \
+              -X main.Version=${{ github.ref_name }} \
+              -X main.FirestoreProjectID=${FIRESTORE_PROJECT_ID} \
+              -X main.FirestoreAPIKey=${FIRESTORE_API_KEY}" \
+            -o bin/einsatzplaner .
 
       - name: Verify tests are not embedded in the binary
         run: |
@@ -98,7 +107,15 @@ jobs:
         env:
           CGO_ENABLED: "1"
           CC: gcc
-        run: go build -tags production -ldflags="-w -s -X main.Version=${{ github.ref_name }}" -o bin/einsatzplaner.exe .
+          FIRESTORE_PROJECT_ID: ${{ secrets.FIRESTORE_PROJECT_ID }}
+          FIRESTORE_API_KEY: ${{ secrets.FIRESTORE_API_KEY }}
+        run: |
+          go build -tags production `
+            -ldflags="-w -s `
+              -X main.Version=${{ github.ref_name }} `
+              -X main.FirestoreProjectID=$env:FIRESTORE_PROJECT_ID `
+              -X main.FirestoreAPIKey=$env:FIRESTORE_API_KEY" `
+            -o bin/einsatzplaner.exe .
 
       - uses: actions/upload-artifact@v7
         with:

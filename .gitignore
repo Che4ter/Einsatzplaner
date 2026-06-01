@@ -8,6 +8,10 @@ vendor/
 # Generated Wails JS bindings (regenerated via: wails3 generate bindings -b -d frontend/bindings)
 frontend/bindings/
 
+# Node.js (only used for local dev tooling — not bundled into the app)
+node_modules/
+package-lock.json
+
 # macOS
 .DS_Store
 
@@ -18,6 +22,5 @@ frontend/bindings/
 
 # Sample/test data
 sample-*.json
-
-sample-2026.json
-.xlsx
+*.xlsx
+local_dev

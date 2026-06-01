@@ -1,0 +1,6 @@
+{
+  "scripts": {
+    "test": "node --test frontend/_tests/*.test.js"
+  },
+  "devDependencies": {}
+}

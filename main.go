@@ -28,6 +28,9 @@ func main() {
 	store := &storage.JSONStore{}
 	planner := service.NewPlannerService(nil, nil, store)
 	planner.SetVersion(Version)
+	if FirestoreProjectID != "" && FirestoreAPIKey != "" {
+		planner.SetCloudCredentials(FirestoreProjectID, FirestoreAPIKey)
+	}
 
 	app := application.New(application.Options{
 		Name:        "Einsatzplaner",

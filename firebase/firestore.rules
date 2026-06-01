@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Deny everything by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Deny listing rooms (prevents enumeration of room codes).
+    match /rooms/{roomCode} {
+      allow list: if false;
+      allow read: if roomCode.size() == 36;
+      // Allow modifying the years array and nothing else
+      allow write: if roomCode.size() == 36 
+                   && request.resource.data.keys().hasOnly(['years']);
+    }
+
+    // Meta document (settings + team): full read/write, locked shape.
+    match /rooms/{roomCode}/plans/{year}/meta/{doc} {
+      allow read: if roomCode.size() == 36;
+      allow write: if roomCode.size() == 36
+                   && request.resource.data.keys().hasAny(['settings', 'team', 'version', 'year']);
+    }
+
+    // Event documents: partial update allowed.
+    match /rooms/{roomCode}/plans/{year}/events/{eventId} {
+      allow read: if roomCode.size() == 36;
+      // Validate that only expected fields are passed and nothing more:
+      allow write: if roomCode.size() == 36 
+                   && request.resource.data.keys().hasAny(['month', 'id', 'type', 'date', 'dateEnd', 'isClosed', 'location', 'timeFrom', 'timeTo', 'timeSetup', 'timeTeardown', 'staffRequired', 'assignedStaff', 'comment'])
+                   // Prevent heavy abusive string inserts:
+                   && (!('comment' in request.resource.data) || request.resource.data.comment.size() < 2000)
+                   && (!('location' in request.resource.data) || request.resource.data.location.size() < 300);
+    }
+
+    // Activity log: append-only.
+    match /rooms/{roomCode}/plans/{year}/activity/{entryId} {
+      allow read: if roomCode.size() == 36;
+      allow create: if roomCode.size() == 36;
+    }
+  }
+}
