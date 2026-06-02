@@ -152,15 +152,7 @@ func (s *PlannerService) CreatePlanFromTemplate(ctx context.Context, year int, t
 		return nil, fmt.Errorf("Vorlage laden: %w", err)
 	}
 
-	plan := storage.NewYearPlan(year)
-	plan.Settings = tmpl.Settings
-	// Deep-copy team slice so we don't share memory with the template.
-	plan.Team = make([]domain.TeamMember, len(tmpl.Team))
-	copy(plan.Team, tmpl.Team)
-
-	if includeEvents {
-		copyEventsFromTemplate(tmpl, plan, year)
-	}
+	plan := planFromTemplate(tmpl, year, includeEvents)
 
 	path, err := s.showSaveDialog(fmt.Sprintf("einsatzplan-%d.json", year), plan)
 	if err != nil {
@@ -179,6 +171,21 @@ func (s *PlannerService) CreatePlanFromTemplate(ctx context.Context, year int, t
 	}
 	s.restartPoller(path)
 	return storage.CopyPlan(s.plan), nil
+}
+
+// planFromTemplate builds a fresh blank plan for year, seeded with the
+// template's settings and team. When includeEvents is true the template's
+// events are copied too (year-adjusted, with fresh IDs and cleared state).
+func planFromTemplate(tmpl *domain.YearPlan, year int, includeEvents bool) *domain.YearPlan {
+	plan := storage.NewYearPlan(year)
+	plan.Settings = tmpl.Settings
+	// Deep-copy team slice so we don't share memory with the template.
+	plan.Team = make([]domain.TeamMember, len(tmpl.Team))
+	copy(plan.Team, tmpl.Team)
+	if includeEvents {
+		copyEventsFromTemplate(tmpl, plan, year)
+	}
+	return plan
 }
 
 // copyEventsFromTemplate copies all events from src into dst, adjusting the
@@ -431,7 +438,7 @@ func (s *PlannerService) GetYearStats(ctx context.Context, month int) domain.Yea
 			excluded[m.ID] = true
 		}
 	}
-	return domain.CalcYearStats(s.eventsForFilter(month), s.plan.Settings.PrepTimeHours, excluded)
+	return domain.CalcYearStats(s.eventsForFilter(month), excluded)
 }
 
 // GetPersonStats returns the per-person bar chart data.
@@ -441,7 +448,7 @@ func (s *PlannerService) GetPersonStats(ctx context.Context, month int) []domain
 	if s.plan == nil {
 		return []domain.PersonStat{}
 	}
-	return domain.CalcPersonStats(s.plan.Team, s.eventsForFilter(month), s.plan.Settings.PrepTimeHours)
+	return domain.CalcPersonStats(s.plan.Team, s.eventsForFilter(month))
 }
 
 // GetActivityLog returns the full activity log (newest first).
@@ -483,7 +490,9 @@ func (s *PlannerService) CreateEvent(ctx context.Context, month int, ev domain.E
 	appendActivity(s.plan, activityEntry)
 	if s.isOnline {
 		evCopy := ev
-		s.cloudSaveEvent(month, evCopy)
+		// Use the full-document create so initial assignedStaff is persisted —
+		// cloudSaveEvent (update path) strips it. See cloudCreateEvent.
+		s.cloudCreateEvent(month, evCopy)
 		s.cloudAppendActivity(activityEntry)
 	} else {
 		s.markDirty()
@@ -711,6 +720,7 @@ func (s *PlannerService) CreateMember(ctx context.Context, m domain.TeamMember) 
 	if err := domain.ValidateTeamMember(m); err != nil {
 		return "", err
 	}
+	m.Color = domain.NormalizeMemberColor(m.Color)
 	m.ID = generateID()
 	s.plan.Team = append(s.plan.Team, m)
 	if s.isOnline {
@@ -731,6 +741,7 @@ func (s *PlannerService) UpdateMember(ctx context.Context, m domain.TeamMember) 
 	if err := domain.ValidateTeamMember(m); err != nil {
 		return err
 	}
+	m.Color = domain.NormalizeMemberColor(m.Color)
 	idx := slices.IndexFunc(s.plan.Team, func(t domain.TeamMember) bool { return t.ID == m.ID })
 	if idx < 0 {
 		return fmt.Errorf("member %q not found", m.ID)
@@ -850,6 +861,8 @@ func validateMonth(month int) error {
 	return nil
 }
 
+// requirePlan reports whether a plan is loaded. Caller must hold s.mu (read or
+// write) — it reads s.plan without locking.
 func (s *PlannerService) requirePlan() error {
 	if s.plan == nil {
 		return fmt.Errorf("no plan loaded")
@@ -857,6 +870,8 @@ func (s *PlannerService) requirePlan() error {
 	return nil
 }
 
+// markDirty sets the unsaved-changes flag. Caller must hold s.mu (write) — it
+// mutates s.dirty without locking.
 func (s *PlannerService) markDirty() {
 	s.dirty = true
 }

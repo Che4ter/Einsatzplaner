@@ -80,7 +80,7 @@ func CalcAllMonthSummaries(plan *YearPlan) map[int]MonthSummary {
 
 // CalcYearStats computes the four headline numbers from a set of events.
 // Pass a filtered slice (e.g. one month or all months, already excluding closed).
-func CalcYearStats(events []Event, _ float64, excludedIDs map[string]bool) YearStats {
+func CalcYearStats(events []Event, excludedIDs map[string]bool) YearStats {
 	var s YearStats
 	for _, e := range events {
 		if e.IsClosed {
@@ -121,7 +121,7 @@ func CalcYearStats(events []Event, _ float64, excludedIDs map[string]bool) YearS
 }
 
 // CalcPersonStats builds the per-person bar chart data, sorted by total (desc).
-func CalcPersonStats(team []TeamMember, events []Event, _ float64) []PersonStat {
+func CalcPersonStats(team []TeamMember, events []Event) []PersonStat {
 	idx := make(map[string]*PersonStat, len(team))
 	out := make([]PersonStat, len(team))
 	for i, m := range team {

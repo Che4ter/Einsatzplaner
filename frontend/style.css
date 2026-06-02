@@ -381,6 +381,26 @@ ul { list-style: none; }
   background: var(--amber);
   box-shadow: 0 0 0 3px var(--amber-soft);
 }
+/* Cloud write in flight — pulsing amber. */
+.save-state.syncing .dot {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px var(--amber-soft);
+  animation: save-state-pulse 1s ease-in-out infinite;
+}
+/* Cloud write failed — data not persisted to the server. */
+.save-state.error {
+  border-color: var(--rose);
+  color: var(--rose);
+  background: var(--rose-soft);
+}
+.save-state.error .dot {
+  background: var(--rose);
+  box-shadow: 0 0 0 3px var(--rose-soft);
+}
+@keyframes save-state-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
 
 /* Unsaved dot (legacy element kept, hidden by new save pill) */
 .unsaved-dot { display: none !important; }

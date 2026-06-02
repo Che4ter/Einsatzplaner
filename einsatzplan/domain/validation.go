@@ -13,6 +13,22 @@ var (
 	ErrInvalidMember = errors.New("invalid team member")
 )
 
+// DefaultTeamColor is applied to team members whose color is missing or not a
+// valid CSS hex color. Centralising it here keeps the "stored color is always
+// valid hex" invariant in one place: both the storage layer (on load) and the
+// service layer (on create/update) call NormalizeMemberColor.
+const DefaultTeamColor = "#0d9488"
+
+// NormalizeMemberColor returns color unchanged if it is a valid CSS hex color,
+// otherwise DefaultTeamColor. This prevents an empty or crafted value from being
+// interpolated into a style attribute in the frontend.
+func NormalizeMemberColor(color string) string {
+	if IsValidHexColor(color) {
+		return color
+	}
+	return DefaultTeamColor
+}
+
 func isValidEventType(t string) bool {
 	switch t {
 	case EventTypeWednesday, EventTypeWeekday, EventTypeWeekend:

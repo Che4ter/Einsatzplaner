@@ -16,6 +16,9 @@ import {
   fmtDayHeading, renderQAPopover,
 } from './render.js';
 import * as FirebaseSync from './firebaseSync.js';
+import {
+  showToast, showModal, closeModal, showConfirm, wireConfirmButtons,
+} from './ui.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 2. STATE
@@ -977,6 +980,10 @@ async function applyReloadedPlan(plan) {
 }
 
 async function onPlanLoaded(plan) {
+  // A freshly loaded plan (local open, or a cloud connect that re-pulls the full
+  // document) reconciles local state with its source, so any prior cloud-sync
+  // failure no longer applies.
+  resetCloudWriteState();
   state.plan = plan;
   updateSidebarMeta(plan);
   document.getElementById('sb-filename').textContent = plan.year;
@@ -2057,33 +2064,9 @@ function doExportPDF() {
   idoc.close();
 }
 
-// ── Modal helpers ─────────────────────────────────────────────────────────────
-
-function showModal(id) {
-  document.getElementById(id)?.classList.remove('hidden');
-}
-function closeModal(id) {
-  document.getElementById(id)?.classList.add('hidden');
-}
-
-// Shows a styled confirm dialog. Returns a Promise<boolean>.
-let _confirmResolve = null;
-function showConfirm({ kicker = '', title = '', message = '', okLabel = 'OK' } = {}) {
-  document.getElementById('modal-confirm-kicker').textContent = kicker;
-  document.getElementById('modal-confirm-title').textContent = title;
-  document.getElementById('modal-confirm-msg').textContent = message;
-  document.getElementById('btn-modal-confirm-ok').textContent = okLabel;
-  showModal('modal-confirm');
-  return new Promise(resolve => { _confirmResolve = resolve; });
-}
-document.getElementById('btn-modal-confirm-ok')?.addEventListener('click', () => {
-  closeModal('modal-confirm');
-  if (_confirmResolve) { _confirmResolve(true); _confirmResolve = null; }
-});
-document.getElementById('btn-modal-confirm-cancel')?.addEventListener('click', () => {
-  closeModal('modal-confirm');
-  if (_confirmResolve) { _confirmResolve(false); _confirmResolve = null; }
-});
+// Modal/confirm helpers now live in ui.js (imported above). Wire the confirm
+// dialog buttons once at startup.
+wireConfirmButtons();
 
 // ── Form helpers ──────────────────────────────────────────────────────────────
 
@@ -2236,15 +2219,7 @@ function selectColor(color) {
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 
-window.showToast = function(msg, type = 'info') {
-  const c = document.getElementById('toast-container');
-  if (!c) return;
-  const el = document.createElement('div');
-  el.className = 'toast ' + type;
-  el.textContent = msg;
-  c.appendChild(el);
-  setTimeout(() => el.remove(), 3500);
-};
+// showToast/showModal/closeModal/showConfirm now live in ui.js (imported above).
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 5. EVENT WIRING
@@ -2524,7 +2499,9 @@ document.getElementById('btn-modal-location-cancel2')?.addEventListener('click',
 document.getElementById('btn-modal-time-confirm')?.addEventListener('click', confirmTimeModal);
 document.getElementById('btn-modal-time-cancel')?.addEventListener('click',  () => closeModal('modal-time'));
 document.getElementById('btn-modal-time-cancel2')?.addEventListener('click', () => closeModal('modal-time'));
-document.getElementById('btn-modal-new-confirm')?.addEventListener('click', confirmNewYear);
+// Cloud-aware confirm handler (declared lower in the file, hoisted). It falls
+// back to confirmNewYear() for local plans, so this single binding covers both.
+document.getElementById('btn-modal-new-confirm')?.addEventListener('click', confirmNewYearWithCloud);
 document.getElementById('btn-modal-new-cancel')?.addEventListener('click',  () => { _resetNewYearModal(); closeModal('modal-new-year'); });
 document.getElementById('btn-pick-template')?.addEventListener('click', pickTemplateFile);
 
@@ -2649,6 +2626,8 @@ function applyCloudStatus(status) {
   if (btnSave) btnSave.style.display = status.isOnline ? 'none' : '';
   if (status.isOnline && pill)  pill.classList.remove('dirty');
   if (status.isOnline && label) label.textContent = 'Cloud · live';
+  // Reflect any in-flight or failed cloud writes in the pill.
+  if (status.isOnline) updateCloudWritePill();
 
   // Show/hide cloud storage option in the new-year modal
   // Cloud option is always visible when cloud is enabled (not just when online)
@@ -2835,6 +2814,7 @@ async function doDisconnect() {
   try {
     FirebaseSync.disconnectFromCloud();
     await Planner.DisconnectCloud();
+    resetCloudWriteState();
     const status = await Planner.GetCloudStatus();
     applyCloudStatus(status);
     closeModal('modal-connect');
@@ -2866,31 +2846,117 @@ async function doExportJSON() {
 
 // ── Wails cloud events ────────────────────────────────────────────────────────
 
+// Cloud write tracker.
+//
+// When online, every mutation is applied to Go's in-memory state immediately and
+// then pushed to Firestore via the cloud:* events below. The Firestore write is
+// asynchronous and can fail (offline, quota, permission) AFTER the user already
+// sees the change as applied. Without tracking, a failed write silently diverges
+// the local view from the server.
+//
+// trackCloudWrite() wraps each write promise so we can:
+//   • reflect in-flight writes in the save pill ("Cloud · Synchronisiere…")
+//   • surface a persistent, actionable warning when a write fails, instead of a
+//     transient toast that the user may miss
+//   • raise a sticky "out of sync" flag so the user keeps seeing that the server
+//     is behind their local view until they re-sync (reconnect)
+//
+// `outOfSync` is intentionally a sticky boolean, not a counter: once any write
+// is lost the server is behind, and a later unrelated success does NOT re-send
+// the lost write — so it must not silently clear the warning. It is reset only
+// by resetCloudWriteState() on (dis)connect, which is exactly the recovery
+// action (reconnect re-pulls the full plan from the server).
+const cloudWrites = { pending: 0, outOfSync: false };
+
+function updateCloudWritePill() {
+  if (!state.online) return;
+  const pill  = document.getElementById('save-state');
+  const label = document.getElementById('save-state-label');
+  if (!pill || !label) return;
+  pill.classList.remove('dirty', 'error', 'syncing');
+  if (cloudWrites.outOfSync) {
+    pill.classList.add('error');
+    label.textContent = 'Cloud · Sync-Fehler';
+  } else if (cloudWrites.pending > 0) {
+    pill.classList.add('syncing');
+    label.textContent = 'Cloud · Synchronisiere…';
+  } else {
+    label.textContent = 'Cloud · live';
+  }
+}
+
+// Wraps a cloud-write promise: counts it as in-flight, and on failure sets the
+// sticky out-of-sync flag and raises a persistent warning. `label` describes the
+// action for the failure message. Activity-log writes pass silent=true — losing
+// one log line must not nag the user or flip the sync flag, but it still counts
+// toward pending so the "Synchronisiere…" state is accurate.
+function trackCloudWrite(promise, label, silent = false) {
+  cloudWrites.pending++;
+  updateCloudWritePill();
+  return promise.then(
+    () => {
+      cloudWrites.pending--;
+      updateCloudWritePill();
+    },
+    (err) => {
+      cloudWrites.pending--;
+      if (!silent) {
+        cloudWrites.outOfSync = true;
+        showToast(
+          `${label} konnte nicht in die Cloud gespeichert werden. ` +
+          `Die Server-Daten sind jetzt veraltet — verbinde neu oder exportiere ` +
+          `zur Sicherheit (Export → JSON).`,
+          'error', 8000,
+        );
+      }
+      updateCloudWritePill();
+      return Promise.reject(err);
+    },
+  ).catch(() => {}); // swallow so callers don't see unhandled rejections
+}
+
+// resetCloudWriteState clears the tracker — call on (dis)connect so a fresh room
+// doesn't inherit a stale "Sync-Fehler" badge, and so a successful reconnect
+// (which re-pulls the full plan) clears a prior failure.
+function resetCloudWriteState() {
+  cloudWrites.pending = 0;
+  cloudWrites.outOfSync = false;
+}
+
 // Each Events.On callback receives a WailsEvent object. .data holds the payload.
 // When Go emits multiple args, .data is an array; single arg → .data is the value.
 Events.On('cloud:save-event', (e) => {
   const [month, ev] = e.data;
-  FirebaseSync.dbSaveEvent(month, ev).catch(err => showToast('Cloud-Speichern fehlgeschlagen: ' + err, 'error'));
+  trackCloudWrite(FirebaseSync.dbSaveEvent(month, ev), 'Einsatz');
+});
+// Create writes the FULL event document (incl. assignedStaff). dbSaveEvent
+// strips assignedStaff for the update path; on create the doc doesn't exist yet
+// so the initial assignments must be written here or they'd be lost on reload.
+Events.On('cloud:create-event', (e) => {
+  const [month, ev] = e.data;
+  trackCloudWrite(FirebaseSync.dbSaveEventFull(month, ev), 'Einsatz');
 });
 Events.On('cloud:delete-event', (e) => {
-  FirebaseSync.dbDeleteEvent(e.data).catch(err => showToast('Cloud-Löschen fehlgeschlagen: ' + err, 'error'));
+  trackCloudWrite(FirebaseSync.dbDeleteEvent(e.data), 'Löschen');
 });
 Events.On('cloud:save-settings', (e) => {
-  FirebaseSync.dbSaveSettings(e.data).catch(err => showToast('Cloud-Speichern fehlgeschlagen: ' + err, 'error'));
+  trackCloudWrite(FirebaseSync.dbSaveSettings(e.data), 'Einstellungen');
 });
 Events.On('cloud:save-member', (e) => {
-  FirebaseSync.dbSaveMember(e.data).catch(err => showToast('Cloud-Speichern fehlgeschlagen: ' + err, 'error'));
+  trackCloudWrite(FirebaseSync.dbSaveMember(e.data), 'Person');
 });
 Events.On('cloud:delete-member', (e) => {
-  FirebaseSync.dbDeleteMember(e.data).catch(err => showToast('Cloud-Löschen fehlgeschlagen: ' + err, 'error'));
+  trackCloudWrite(FirebaseSync.dbDeleteMember(e.data), 'Person löschen');
 });
 Events.On('cloud:append-activity', (e) => {
-  FirebaseSync.dbAppendActivity(e.data).catch(() => {});
+  trackCloudWrite(FirebaseSync.dbAppendActivity(e.data), 'Verlauf', true);
 });
 Events.On('cloud:toggle-staff', (e) => {
   const [eventId, memberId, assign] = e.data;
-  if (assign) FirebaseSync.dbAssignStaff(eventId, memberId).catch(err => showToast('Cloud-Speichern fehlgeschlagen: ' + err, 'error'));
-  else FirebaseSync.dbUnassignStaff(eventId, memberId).catch(err => showToast('Cloud-Speichern fehlgeschlagen: ' + err, 'error'));
+  const p = assign
+    ? FirebaseSync.dbAssignStaff(eventId, memberId)
+    : FirebaseSync.dbUnassignStaff(eventId, memberId);
+  trackCloudWrite(p, 'Zuteilung');
 });
 
 Events.On('plan:cloud-meta-changed', async () => {
@@ -3037,12 +3103,6 @@ async function confirmNewYearWithCloud() {
     return;
   }
   await confirmNewYear();
-}
-// Re-wire the new-year confirm button to the cloud-aware version.
-const confirmBtn = document.getElementById('btn-modal-new-confirm');
-if (confirmBtn) {
-  confirmBtn.removeEventListener('click', confirmNewYear);
-  confirmBtn.addEventListener('click', confirmNewYearWithCloud);
 }
 
 // Escape key: include cloud modal

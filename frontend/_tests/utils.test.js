@@ -70,6 +70,21 @@ test('weekNumber computes ISO week numbers', () => {
   assert.equal(weekNumber('2025-12-29'), 1);
 });
 
+test('weekNumber handles year-boundary weeks per ISO 8601', () => {
+  // A Jan 1 that falls early in the week belongs to the LAST week of the
+  // previous ISO year (week 52 or 53), never week 0. These lock the correct
+  // ISO behaviour so the "KW 52–5" style range labels stay intentional.
+  assert.equal(weekNumber('2021-01-01'), 53); // Fri -> ISO week 53 of 2020
+  assert.equal(weekNumber('2022-01-01'), 52); // Sat -> ISO week 52 of 2021
+  assert.equal(weekNumber('2023-01-01'), 52); // Sun -> ISO week 52 of 2022
+  // A late-December date can belong to ISO week 1 of the next year.
+  assert.equal(weekNumber('2024-12-30'), 1);  // Mon -> ISO week 1 of 2025
+  // weekNumber is always >= 1 (never 0).
+  for (const iso of ['2020-12-31', '2027-01-01', '2016-01-01']) {
+    assert.ok(weekNumber(iso) >= 1, `${iso} should be >= 1`);
+  }
+});
+
 test('getWednesdays returns every Wednesday of a month as ISO strings', () => {
   // January 2026: Wednesdays fall on 7, 14, 21, 28.
   assert.deepEqual(getWednesdays(2026, 1), [

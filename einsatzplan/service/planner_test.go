@@ -277,6 +277,60 @@ func TestCreateMember(t *testing.T) {
 	}
 }
 
+// CreateMember normalises an empty colour to the default so the "stored colour
+// is always valid hex" invariant holds on the API path too, not just on
+// disk-load. An explicitly invalid (non-empty) colour is still rejected by
+// validation rather than silently rewritten.
+func TestCreateMember_NormalizesEmptyColor(t *testing.T) {
+	svc, ms := newTestService()
+	mustLoadPlan(t, svc, ms)
+	id, err := svc.CreateMember(context.Background(), domain.TeamMember{Name: "X", Color: ""})
+	if err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+	plan := svc.GetPlan(context.Background())
+	var got string
+	for _, m := range plan.Team {
+		if m.ID == id {
+			got = m.Color
+		}
+	}
+	if !domain.IsValidHexColor(got) {
+		t.Errorf("stored colour %q is not valid hex", got)
+	}
+	if got != domain.DefaultTeamColor {
+		t.Errorf("empty colour = %q, want default %q", got, domain.DefaultTeamColor)
+	}
+}
+
+func TestCreateMember_RejectsInvalidColor(t *testing.T) {
+	svc, ms := newTestService()
+	mustLoadPlan(t, svc, ms)
+	for _, bad := range []string{"red", "#fff;background:url(x)", "0d9488"} {
+		if _, err := svc.CreateMember(context.Background(), domain.TeamMember{Name: "X", Color: bad}); err == nil {
+			t.Errorf("CreateMember accepted invalid colour %q", bad)
+		}
+	}
+}
+
+func TestUpdateMember_NormalizesColor(t *testing.T) {
+	svc, ms := newTestService()
+	mustLoadPlan(t, svc, ms)
+	id, _ := svc.CreateMember(context.Background(), domain.TeamMember{Name: "Y", Color: "#123456"})
+	plan := svc.GetPlan(context.Background())
+	upd := plan.Team[0]
+	upd.Color = "" // user cleared the colour field
+	if err := svc.UpdateMember(context.Background(), upd); err != nil {
+		t.Fatalf("UpdateMember: %v", err)
+	}
+	plan = svc.GetPlan(context.Background())
+	for _, m := range plan.Team {
+		if m.ID == id && !domain.IsValidHexColor(m.Color) {
+			t.Errorf("cleared colour normalised to %q, not valid hex", m.Color)
+		}
+	}
+}
+
 func TestToggleMemberActive(t *testing.T) {
 	svc, ms := newTestService()
 	mustLoadPlan(t, svc, ms)

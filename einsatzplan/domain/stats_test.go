@@ -47,7 +47,7 @@ func TestCalcYearStats_Coverage(t *testing.T) {
 		{StaffRequired: 2, AssignedStaff: []string{"a", "b"}, TimeFrom: "14:00", TimeTo: "17:00"},
 		{StaffRequired: 2, AssignedStaff: []string{"a"}, TimeFrom: "14:00", TimeTo: "17:00"},
 	}
-	s := domain.CalcYearStats(events, 0, nil)
+	s := domain.CalcYearStats(events, nil)
 	// totalNeed=4, totalAssigned=3 → 75% → warn
 	if s.TotalNeed != 4 {
 		t.Errorf("TotalNeed = %d, want 4", s.TotalNeed)
@@ -73,7 +73,7 @@ func TestCalcYearStats_OverAssignmentDoesNotMaskGaps(t *testing.T) {
 		{StaffRequired: 2, AssignedStaff: []string{"a", "b", "c"}, TimeFrom: "14:00", TimeTo: "17:00"},
 		{StaffRequired: 2, AssignedStaff: []string{"a"}, TimeFrom: "14:00", TimeTo: "17:00"},
 	}
-	s := domain.CalcYearStats(events, 0, nil)
+	s := domain.CalcYearStats(events, nil)
 	if s.TotalNeed != 4 {
 		t.Errorf("TotalNeed = %d, want 4", s.TotalNeed)
 	}
@@ -100,7 +100,7 @@ func TestCalcYearStats_Hours(t *testing.T) {
 			TimeFrom:      "14:00", TimeTo: "17:00",
 		},
 	}
-	s := domain.CalcYearStats(events, 0, nil)
+	s := domain.CalcYearStats(events, nil)
 	if s.TotalHours != 6 {
 		t.Errorf("TotalHours = %f, want 6", s.TotalHours)
 	}
@@ -115,7 +115,7 @@ func TestCalcYearStats_MultiDayHours(t *testing.T) {
 			TimeFrom: "14:00", TimeTo: "17:00",
 		},
 	}
-	s := domain.CalcYearStats(events, 0, nil)
+	s := domain.CalcYearStats(events, nil)
 	if s.TotalHours != 6 {
 		t.Errorf("TotalHours = %f, want 6 (multi-day)", s.TotalHours)
 	}
@@ -126,7 +126,7 @@ func TestCalcYearStats_SkipsClosed(t *testing.T) {
 		{IsClosed: true, StaffRequired: 3, AssignedStaff: []string{"a", "b", "c"}},
 		{StaffRequired: 1, AssignedStaff: []string{"a"}, TimeFrom: "14:00", TimeTo: "17:00"},
 	}
-	s := domain.CalcYearStats(events, 0, nil)
+	s := domain.CalcYearStats(events, nil)
 	if s.TotalEvents != 1 {
 		t.Errorf("TotalEvents = %d, want 1 (closed excluded)", s.TotalEvents)
 	}
@@ -142,7 +142,7 @@ func TestCalcPersonStats_Sort(t *testing.T) {
 		{Type: "wednesday", AssignedStaff: []string{"a", "b"}, TimeFrom: "14:00", TimeTo: "17:00"},
 		{Type: "wednesday", AssignedStaff: []string{"b"}, TimeFrom: "14:00", TimeTo: "17:00"},
 	}
-	stats := domain.CalcPersonStats(team, events, 0)
+	stats := domain.CalcPersonStats(team, events)
 	if stats[0].ID != "b" {
 		t.Errorf("expected Bob first (2 events), got %s", stats[0].ID)
 	}
@@ -161,7 +161,7 @@ func TestCalcPersonStats_WeekendDays(t *testing.T) {
 		{Type: "weekend", Date: "2026-05-30", DateEnd: "2026-05-31",
 			AssignedStaff: []string{"a"}, TimeFrom: "14:00", TimeTo: "17:00"},
 	}
-	stats := domain.CalcPersonStats(team, events, 0)
+	stats := domain.CalcPersonStats(team, events)
 	if stats[0].Wke != 2 {
 		t.Errorf("Wke = %d, want 2 for Sa+So", stats[0].Wke)
 	}

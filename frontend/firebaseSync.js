@@ -12,6 +12,7 @@ import {
   setDoc,
   deleteDoc,
   getDoc,
+  getDocs,
   getDocFromCache,
   getDocFromServer,
   deleteField,
@@ -126,9 +127,24 @@ export async function connectToCloud(roomCode, year) {
         year: year,
         settings: {},
         team: [],
-        months: {}
+        months: {},
+        activityLog: []
       };
       for(let i=1; i<=12; i++) initialPlan.months[i] = { events: [] };
+
+      // The activity log is append-only history; a one-shot read on connect is
+      // enough to restore it (no live listener needed). Without this it would be
+      // rebuilt empty on every reconnect, silently losing all history.
+      let activityLoaded = false;
+      getDocs(collection(db, `rooms/${roomCode}/plans/${year}/activity`))
+        .then((snap) => {
+          const entries = [];
+          snap.forEach((d) => entries.push(d.data()));
+          entries.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+          initialPlan.activityLog = entries;
+        })
+        .catch(() => { /* offline or empty — leave log empty */ })
+        .finally(() => { activityLoaded = true; checkInitialLoad(); });
 
       // Track whether the meta doc existed on the first snapshot. A missing meta
       // doc could mean a brand-new plan (bootstrap) or a deleted room. We tell
@@ -218,7 +234,7 @@ export async function connectToCloud(roomCode, year) {
       currentUnsubscribes.push(unsubEvents);
 
       async function checkInitialLoad() {
-        if (metaLoaded && eventsLoaded) {
+        if (metaLoaded && eventsLoaded && activityLoaded) {
           clearTimeout(connectTimer);
           settled = true;
           const resolved = await SyncFullPlan(initialPlan);
@@ -254,7 +270,7 @@ export function dbSaveEvent(month, ev) {
   // Optional fields that are absent/empty must be explicitly deleted so that a
   // previously set value (e.g. dateEnd, comment) is cleared rather than left stale.
   const OPTIONAL_FIELDS = ['dateEnd', 'comment', 'timeSetup', 'timeTeardown'];
-  const payload = { ...JSON.parse(JSON.stringify(rest)), month };
+  const payload = { ...structuredClone(rest), month };
   for (const field of OPTIONAL_FIELDS) {
     if (payload[field] === '' || payload[field] == null) payload[field] = deleteField();
   }

@@ -39,6 +39,13 @@ func (s *PlannerService) GenerateRoomCode(_ context.Context) string {
 }
 
 // GetCloudStatus returns current cloud connectivity state.
+//
+// APIKey is intentionally returned to the frontend: the JS Firebase SDK needs it
+// to initialise, and a Firebase Web API key is public by design (it identifies
+// the project, not a user — see Firebase's security model). The only real secret
+// is the UUID room code, which is never returned unless the caller already holds
+// it. This binding is callable at any time, not only at boot; that is acceptable
+// given the key carries no privilege on its own.
 func (s *PlannerService) GetCloudStatus(_ context.Context) CloudStatus {
 	s.mu.RLock()
 	st := CloudStatus{
@@ -189,14 +196,7 @@ func (s *PlannerService) CreateCloudPlan(ctx context.Context, year int, roomCode
 
 	if templatePath != "" {
 		if tmpl, err := s.store.Load(templatePath); err == nil {
-			plan.Settings = tmpl.Settings
-			plan.Team = make([]domain.TeamMember, len(tmpl.Team))
-			copy(plan.Team, tmpl.Team)
-			if includeEvents {
-				// Reuse the same helper as CreatePlanFromTemplate: adjusts event
-				// dates to the target year, assigns fresh IDs, clears assignments.
-				copyEventsFromTemplate(tmpl, plan, year)
-			}
+			plan = planFromTemplate(tmpl, year, includeEvents)
 		}
 	}
 
@@ -221,6 +221,17 @@ func (s *PlannerService) CreateCloudPlan(ctx context.Context, year int, roomCode
 func (s *PlannerService) cloudSaveEvent(month int, ev domain.Event) {
 	if s.isOnline && s.win != nil {
 		s.win.EmitEvent("cloud:save-event", month, ev)
+	}
+}
+
+// cloudCreateEvent emits a full-document write for a brand-new event, INCLUDING
+// assignedStaff. cloudSaveEvent (used for updates) deliberately strips
+// assignedStaff so concurrent atomic toggles aren't clobbered — but on create
+// the event doc doesn't exist yet, so there is nothing to clobber and the
+// initial assignments would otherwise be lost. Must be used only for creates.
+func (s *PlannerService) cloudCreateEvent(month int, ev domain.Event) {
+	if s.isOnline && s.win != nil {
+		s.win.EmitEvent("cloud:create-event", month, ev)
 	}
 }
 func (s *PlannerService) cloudDeleteEvent(eventID string) {
