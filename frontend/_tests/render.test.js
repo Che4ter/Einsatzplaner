@@ -1,11 +1,10 @@
 // Unit tests for the pure presentational components in render.js.
-// Run with:  node --test   (from the frontend/ directory)
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import {
   renderEventCard, renderClosedCard, renderActivityEntry,
   fmtDayHeading, renderQAPopover,
-} from '../render.js';
+} from '../render/index.js';
 
 const TEAM = [
   { id: 'a', name: 'Anna',  color: '#0d9488', active: true },

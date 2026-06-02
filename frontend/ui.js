@@ -40,6 +40,12 @@ export function showConfirm({ kicker = '', title = '', message = '', okLabel = '
   return new Promise(resolve => { _confirmResolve = resolve; });
 }
 
+// Cancels any in-flight confirm dialog (Escape key handler calls this).
+export function cancelConfirm() {
+  if (_confirmResolve) { _confirmResolve(false); _confirmResolve = null; }
+  closeModal('modal-confirm');
+}
+
 // wireConfirmButtons binds the confirm dialog's OK/Cancel buttons. Call once at
 // startup (after the DOM is parsed).
 export function wireConfirmButtons() {

@@ -8,9 +8,11 @@ vendor/
 # Generated Wails JS bindings (regenerated via: wails3 generate bindings -b -d frontend/bindings)
 frontend/bindings/
 
-# Node.js (only used for local dev tooling — not bundled into the app)
+# Node.js
 node_modules/
-package-lock.json
+/package-lock.json
+frontend/dist/*
+!frontend/dist/.gitkeep
 
 # macOS
 .DS_Store

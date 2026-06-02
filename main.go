@@ -14,11 +14,10 @@ import (
 // Version is set at build time via -ldflags "-X main.Version=v1.2.3".
 var Version = "dev"
 
-// Embeds the built frontend. The plain (non-`all:`) form intentionally skips
-// files and directories whose names begin with "_" or "." — e.g. the
-// frontend/_tests/ unit tests, which must not ship in the binary.
+// Embeds the Vite-built frontend output. Using the dist/ subdirectory keeps
+// source files, tests, and node_modules out of the binary.
 //
-//go:embed frontend
+//go:embed frontend/dist
 var assets embed.FS
 
 //go:embed build/appicon.png

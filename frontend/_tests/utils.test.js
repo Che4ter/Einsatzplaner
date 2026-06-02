@@ -1,6 +1,5 @@
 // Unit tests for the pure helpers in utils.js.
-// Run with:  node --test   (from the frontend/ directory)
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import {
   esc, escNl, getMonth, formatDate, weekNumber, localIso,

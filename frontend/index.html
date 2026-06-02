@@ -8,18 +8,9 @@
        restricted to same-origin (app.js + the Wails runtime); inline styles are
        required because the UI interpolates colours into style attributes. -->
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.googleapis.com https://*.google.com https://*.firebaseio.com wss://*.firebaseio.com wss://*.googleapis.com; object-src 'none'; base-uri 'self'; form-action 'none'">
+    content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.googleapis.com https://*.google.com https://*.firebaseio.com wss://*.firebaseio.com wss://*.googleapis.com; object-src 'none'; base-uri 'self'; form-action 'none'">
   <title>Einsatzplan</title>
   <link rel="stylesheet" href="style.css">
-  
-  <script type="importmap">
-    {
-      "imports": {
-        "firebase/app": "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js",
-        "firebase/firestore": "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js"
-      }
-    }
-  </script>
   
   <!-- Wails v3 runtime — injected by the asset server -->
   <script src="/wails/runtime.js?v=20260519"></script>
@@ -588,6 +579,6 @@
 <!-- ─── Global tooltip ───────────────────────────────────── -->
 <div id="app-tooltip" class="app-tooltip"></div>
 
-<script type="module" src="app.js"></script>
+<script type="module" src="app.ts"></script>
 </body>
 </html>

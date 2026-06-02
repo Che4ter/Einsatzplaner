@@ -164,35 +164,75 @@ For a small team with one or two active plans this is effectively unlimited in n
 
 ## Development
 
+### First-time setup (after cloning)
+
 ```bash
-# After cloning: fetch all dependencies (including the wails3 CLI tool)
+# 1. Fetch Go dependencies
 go mod tidy
 
-# Generate JS bindings (run once after Go service changes)
-# -b: use bundled runtime (/wails/runtime.js) instead of bare @wailsio/runtime specifier
+# 2. Generate Wails JS bindings (also re-run when Go service signatures change)
+#    -b: use bundled runtime path (/wails/runtime.js)
 go run github.com/wailsapp/wails/v3/cmd/wails3 generate bindings -b
 
-# Build and run (frontend served live from disk)
-go build -o bin/einsatzplaner . && ./bin/einsatzplaner
+# 3. Install frontend npm dependencies and do an initial build
+cd frontend && npm install && npm run build && cd ..
+```
 
-# Build and run with cloud sync enabled (development)
+> **Note:** `go build` embeds `frontend/dist/` — that directory must exist before
+> the Go build runs. Steps 2 and 3 above create it.
+
+### Day-to-day dev workflow
+
+The app serves `frontend/dist/` from disk in dev mode, so you only need to rebuild
+the Go binary when Go source changes. Frontend changes are applied by rebuilding the
+Vite bundle (fast, ~1 s) and reloading the window.
+
+**Terminal 1 — watch for frontend changes:**
+
+```bash
+cd frontend && npm run build:watch
+```
+
+**Terminal 2 — run the app:**
+
+```bash
+go build -o bin/einsatzplaner . && ./bin/einsatzplaner
+```
+
+After saving a frontend file, wait for Vite to finish (you'll see `✓ built in …` in
+Terminal 1), then press **Ctrl + R** in the app window to reload (or use the
+DevTools → Reload option if DevTools are open).
+
+To enable cloud sync during development:
+
+```bash
 go build \
   -ldflags "-X main.FirestoreProjectID=<PROJECT_ID> -X main.FirestoreAPIKey=<API_KEY>" \
   -o bin/einsatzplaner . && ./bin/einsatzplaner
 ```
 
-Frontend changes (HTML/CSS/JS) are picked up immediately without rebuilding.
+### Frontend tests
+
+```bash
+cd frontend
+npm test           # run once
+npm run test:watch # watch mode
+npm run typecheck  # TypeScript type-check (no emit)
+```
 
 ## Production build
 
+The `production` build tag embeds `frontend/dist/` into the binary. Build the
+frontend first:
+
 ```bash
-# Linux
+# 1. Build frontend bundle
+cd frontend && npm run build && cd ..
+
+# 2. Build Go binary — Linux
 go build -tags production -ldflags="-w -s -X main.Version=v1.0.0" -o bin/einsatzplaner .
 
-# Windows (cross-compile from Linux)
+# 2. Build Go binary — Windows (cross-compile from Linux)
 GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc \
   go build -tags production -ldflags="-w -s -X main.Version=v1.0.0" -o bin/einsatzplaner.exe .
 ```
-
-The `production` build tag embeds the entire `frontend/` directory into the binary —
-no external files needed at runtime.

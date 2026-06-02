@@ -1,7 +1,7 @@
 {
   "type": "module",
   "scripts": {
-    "test": "node --test frontend/_tests/*.test.js"
+    "test": "npm --prefix frontend test"
   },
   "devDependencies": {}
 }

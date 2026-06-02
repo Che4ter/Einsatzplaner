@@ -13,7 +13,7 @@ import (
 // newAssetHandler serves frontend files from disk so edits are visible without rebuilding.
 // Wails runtime assets are served by the bundled asset server under /wails/*.
 func newAssetHandler(assets embed.FS) http.Handler {
-	disk := http.FileServer(http.Dir("frontend"))
+	disk := http.FileServer(http.Dir("frontend/dist"))
 	bundled := application.BundledAssetFileServer(assets)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
