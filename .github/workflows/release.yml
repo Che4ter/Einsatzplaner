@@ -183,11 +183,18 @@ jobs:
             -X main.FirestoreProjectID=${FIRESTORE_PROJECT_ID} \
             -X main.FirestoreAPIKey=${FIRESTORE_API_KEY}"
 
-          GOARCH=arm64 go build -tags production \
+          # CGO_ENABLED=1 is required: wails/v3/pkg/mac uses Objective-C (import "C").
+          # Without it Go disables CGO on cross-compile and the file is excluded by
+          # build constraints, causing a fatal "no Go files" error.
+          CGO_ENABLED=1 GOARCH=arm64 \
+            go build -tags production \
             -ldflags="${LDFLAGS}" \
             -o bin/einsatzplaner-arm64 .
 
-          GOARCH=amd64 go build -tags production \
+          # For the amd64 slice, pass -target to clang so the cross-compile works.
+          CGO_ENABLED=1 GOARCH=amd64 \
+            CC="clang -target x86_64-apple-macos11.0" \
+            go build -tags production \
             -ldflags="${LDFLAGS}" \
             -o bin/einsatzplaner-amd64 .
 

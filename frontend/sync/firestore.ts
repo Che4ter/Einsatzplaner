@@ -21,6 +21,9 @@ import {
   getDocFromCache,
   getDocFromServer,
   deleteField,
+  query,
+  orderBy,
+  limit,
 } from 'firebase/firestore';
 import { SyncFullPlan, SyncMetaUpdate, SyncEventUpdate, ConnectCloud } from '../services.js';
 import {
@@ -116,7 +119,7 @@ export async function connectToCloud(roomCode: string, year: number): Promise<an
     };
 
     let activityLoaded = false;
-    getDocs(collection(db, `rooms/${roomCode}/plans/${year}/activity`))
+    getDocs(query(collection(db, `rooms/${roomCode}/plans/${year}/activity`), orderBy('at'), limit(400)))
       .then(snap => {
         const entries: any[] = [];
         snap.forEach((d: any) => entries.push(d.data()));

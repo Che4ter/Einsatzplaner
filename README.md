@@ -17,7 +17,7 @@ Built with Go + Wails v3. Single binary, no install, runs on Linux and Windows.
 
 **Locations & time presets** — configure your team's default locations and time-slot presets in settings so you're not typing the same values every time.
 
-**Activity log** — every assign, unassign, edit, close, reopen, and note action is recorded with a timestamp so you always know who changed what.
+**Activity log** — every assign, unassign, edit, close, reopen, and note action is recorded with a timestamp so you always know who changed what. The most recent 400 entries per year are loaded on connect.
 
 **PDF** — export the schedule as a PDF to print out and hang it on the wall.
 
