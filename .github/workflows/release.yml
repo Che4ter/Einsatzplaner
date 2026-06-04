@@ -36,6 +36,12 @@ jobs:
       - name: Run Go vet
         run: go vet ./einsatzplan/...
 
+      - name: Install wails3 CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.97
+
+      - name: Generate JS bindings
+        run: wails3 generate bindings -b -d frontend/bindings
+
       - name: Install frontend dependencies
         run: npm ci --prefix frontend
 
