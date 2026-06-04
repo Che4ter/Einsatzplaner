@@ -4,7 +4,7 @@
 import * as Planner from '../services.js';
 import type { YearPlan } from '../services.js';
 import { state, setAutosavePaused } from '../state.js';
-import { showToast, showModal, showConfirm } from '../ui.js';
+import { showToast, showConfirm } from '../ui.js';
 import { esc } from '../utils.js';
 import { resetCloudWriteState, disconnectFromCloud } from '../sync/index.js';
 import { el, setText, setHtml, show, hide } from '../dom.js';
@@ -111,11 +111,6 @@ export async function refreshCurrentPage(): Promise<void> {
     case 'year':       await showYearPage(); break;
     default:           await onPlanLoaded(state.plan!); break;
   }
-}
-
-export async function cmdNew(): Promise<void> {
-  // TODO: call resetNewYearModal from cloud.ts once wired
-  showModal('modal-new-year');
 }
 
 export async function cmdOpen(): Promise<void> {
