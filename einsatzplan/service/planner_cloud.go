@@ -174,6 +174,18 @@ func (s *PlannerService) SyncEventUpdate(_ context.Context, month int, ev domain
 	}
 }
 
+// SyncActivityAppend appends a single activity entry from the JS Firebase listener.
+func (s *PlannerService) SyncActivityAppend(_ context.Context, entry domain.ActivityEntry) {
+	s.mu.Lock()
+	if s.plan != nil {
+		s.plan.ActivityLog = append(s.plan.ActivityLog, entry)
+	}
+	s.mu.Unlock()
+	if s.emitter != nil {
+		s.emitter.EmitEvent("plan:cloud-activity-changed")
+	}
+}
+
 // ExportPlanJSON returns the current in-memory plan as a JSON string.
 func (s *PlannerService) ExportPlanJSON(_ context.Context) (string, error) {
 	s.mu.RLock()

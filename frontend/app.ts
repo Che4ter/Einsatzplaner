@@ -357,6 +357,10 @@ Events.On('plan:cloud-event-changed', async (e: any) => {
   } catch { /* non-fatal */ }
 });
 
+Events.On('plan:cloud-activity-changed', async () => {
+  if (state.currentPage === 'verlauf') await showVerlaufPage().catch(() => {});
+});
+
 Events.On('plan:cloud-disconnected', async () => {
   const status = await Planner.GetCloudStatus().catch(() => null);
   if (status) applyCloudStatus(status);

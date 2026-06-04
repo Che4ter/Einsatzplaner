@@ -200,3 +200,4 @@ export const OpenURL = _P.OpenURL as (url: string) => Promise<void>;
 export const SyncFullPlan   = _P.SyncFullPlan   as unknown as (plan: YearPlan) => Promise<YearPlan>;
 export const SyncMetaUpdate = _P.SyncMetaUpdate as (settings: Settings, team: TeamMember[]) => Promise<void>;
 export const SyncEventUpdate = _P.SyncEventUpdate as (month: number, ev: Event, isDelete: boolean) => Promise<void>;
+export const SyncActivityAppend = _P.SyncActivityAppend as (entry: ActivityEntry) => Promise<void>;

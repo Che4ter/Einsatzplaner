@@ -17,7 +17,6 @@ import {
   setDoc,
   deleteDoc,
   getDoc,
-  getDocs,
   getDocFromCache,
   getDocFromServer,
   deleteField,
@@ -25,7 +24,7 @@ import {
   orderBy,
   limit,
 } from 'firebase/firestore';
-import { SyncFullPlan, SyncMetaUpdate, SyncEventUpdate, ConnectCloud } from '../services.js';
+import { SyncFullPlan, SyncMetaUpdate, SyncEventUpdate, SyncActivityAppend, ConnectCloud } from '../services.js';
 import {
   DELETE_MARKER, isDeleteMarker,
   encodeEventUpdate, encodeEventFull,
@@ -119,15 +118,27 @@ export async function connectToCloud(roomCode: string, year: number): Promise<an
     };
 
     let activityLoaded = false;
-    getDocs(query(collection(db, `rooms/${roomCode}/plans/${year}/activity`), orderBy('at'), limit(400)))
-      .then(snap => {
+    const activityQuery = query(
+      collection(db, `rooms/${roomCode}/plans/${year}/activity`),
+      orderBy('at'),
+      limit(400),
+    );
+    const unsubActivity = onSnapshot(activityQuery, { includeMetadataChanges: false }, (snapshot: any) => {
+      if (!activityLoaded) {
         const entries: any[] = [];
-        snap.forEach((d: any) => entries.push(d.data()));
-        entries.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+        snapshot.forEach((d: any) => entries.push(d.data()));
+        entries.sort((a: any, b: any) => String(a.at).localeCompare(String(b.at)));
         initialPlan.activityLog = entries;
-      })
-      .catch(() => {})
-      .finally(() => { activityLoaded = true; checkInitialLoad(); });
+        activityLoaded = true;
+        checkInitialLoad();
+      } else {
+        snapshot.docChanges().forEach((change: any) => {
+          if (change.doc.metadata.hasPendingWrites) return;
+          if (change.type === 'added') SyncActivityAppend(change.doc.data());
+        });
+      }
+    }, () => { if (!activityLoaded) { activityLoaded = true; checkInitialLoad(); } });
+    currentUnsubscribes.push(unsubActivity);
 
     let metaMissingChecked = false;
     let settled = false;

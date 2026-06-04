@@ -887,9 +887,6 @@ func (s *PlannerService) markDirty() {
 // They are NOT exposed as Wails bindings (no context.Context parameter).
 func (s *PlannerService) SetApp(app *application.App)              { s.app = app }
 func (s *PlannerService) SetWindow(win *application.WebviewWindow) { s.win = win; s.emitter = win }
-// SetEmitter injects a test event emitter. Only intended for unit tests.
-func (s *PlannerService) SetEmitter(e EventEmitter) { s.emitter = e }
-
 // IsDirtySync returns the dirty flag synchronously (for the close-guard hook).
 func (s *PlannerService) IsDirtySync() bool {
 	s.mu.RLock()
