@@ -23,6 +23,12 @@ import (
 	"einsatzplaner/einsatzplan/storage"
 )
 
+// EventEmitter abstracts Wails window event emission so PlannerService can be
+// tested without a real Wails runtime.
+type EventEmitter interface {
+	EmitEvent(name string, data ...any) bool
+}
+
 const maxRecentPaths = 3
 
 // PlannerService is the single Wails-bound service. All frontend calls go here.
@@ -33,6 +39,7 @@ type PlannerService struct {
 	mu          sync.RWMutex
 	app         *application.App
 	win         *application.WebviewWindow
+	emitter     EventEmitter // same as win; separate field so tests can inject without a real window
 	store       storage.Store
 	plan        *domain.YearPlan
 	path        string
@@ -879,7 +886,9 @@ func (s *PlannerService) markDirty() {
 // SetApp and SetWindow are called from main() after the Wails app is built.
 // They are NOT exposed as Wails bindings (no context.Context parameter).
 func (s *PlannerService) SetApp(app *application.App)              { s.app = app }
-func (s *PlannerService) SetWindow(win *application.WebviewWindow) { s.win = win }
+func (s *PlannerService) SetWindow(win *application.WebviewWindow) { s.win = win; s.emitter = win }
+// SetEmitter injects a test event emitter. Only intended for unit tests.
+func (s *PlannerService) SetEmitter(e EventEmitter) { s.emitter = e }
 
 // IsDirtySync returns the dirty flag synchronously (for the close-guard hook).
 func (s *PlannerService) IsDirtySync() bool {
@@ -967,8 +976,8 @@ func (s *PlannerService) startFilePoller(ctx context.Context, path string) {
 			fileMtime := info.ModTime()
 			if fileMtime.After(known) && fileMtime.After(lastNotified) {
 				lastNotified = fileMtime
-				if s.win != nil {
-					s.win.EmitEvent("plan:file-changed-externally")
+				if s.emitter != nil {
+					s.emitter.EmitEvent("plan:file-changed-externally")
 				}
 			}
 		}

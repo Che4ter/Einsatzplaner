@@ -118,8 +118,8 @@ func (s *PlannerService) SyncMetaUpdate(_ context.Context, settings domain.Setti
 	}
 	s.mu.Unlock()
 
-	if s.win != nil {
-		s.win.EmitEvent("plan:cloud-meta-changed")
+	if s.emitter != nil {
+		s.emitter.EmitEvent("plan:cloud-meta-changed")
 	}
 }
 
@@ -159,7 +159,7 @@ func (s *PlannerService) SyncEventUpdate(_ context.Context, month int, ev domain
 		}
 	}
 
-	if s.win != nil {
+	if s.emitter != nil {
 		type evPayload struct {
 			Month int    `json:"month"`
 			ID    string `json:"id"`
@@ -170,7 +170,7 @@ func (s *PlannerService) SyncEventUpdate(_ context.Context, month int, ev domain
 			kind = "event_delete"
 		}
 		b, _ := json.Marshal(evPayload{Month: month, ID: ev.ID, Kind: kind})
-		s.win.EmitEvent("plan:cloud-event-changed", string(b))
+		s.emitter.EmitEvent("plan:cloud-event-changed", string(b))
 	}
 }
 
@@ -219,8 +219,8 @@ func (s *PlannerService) CreateCloudPlan(ctx context.Context, year int, roomCode
 
 // The following wrappers emit events to JS to perform granular updates
 func (s *PlannerService) cloudSaveEvent(month int, ev domain.Event) {
-	if s.isOnline && s.win != nil {
-		s.win.EmitEvent("cloud:save-event", month, ev)
+	if s.isOnline && s.emitter != nil {
+		s.emitter.EmitEvent("cloud:save-event", month, ev)
 	}
 }
 
@@ -230,27 +230,27 @@ func (s *PlannerService) cloudSaveEvent(month int, ev domain.Event) {
 // the event doc doesn't exist yet, so there is nothing to clobber and the
 // initial assignments would otherwise be lost. Must be used only for creates.
 func (s *PlannerService) cloudCreateEvent(month int, ev domain.Event) {
-	if s.isOnline && s.win != nil {
-		s.win.EmitEvent("cloud:create-event", month, ev)
+	if s.isOnline && s.emitter != nil {
+		s.emitter.EmitEvent("cloud:create-event", month, ev)
 	}
 }
 func (s *PlannerService) cloudDeleteEvent(eventID string) {
-	if s.isOnline && s.win != nil {
-		s.win.EmitEvent("cloud:delete-event", eventID)
+	if s.isOnline && s.emitter != nil {
+		s.emitter.EmitEvent("cloud:delete-event", eventID)
 	}
 }
 // cloudSaveMember emits a single member upsert — JS writes only that member's
 // map entry in Firestore, leaving all other members untouched.
 func (s *PlannerService) cloudSaveMember(m domain.TeamMember) {
-	if s.isOnline && s.win != nil {
-		s.win.EmitEvent("cloud:save-member", m)
+	if s.isOnline && s.emitter != nil {
+		s.emitter.EmitEvent("cloud:save-member", m)
 	}
 }
 
 // cloudDeleteMember emits a single member deletion by ID.
 func (s *PlannerService) cloudDeleteMember(memberID string) {
-	if s.isOnline && s.win != nil {
-		s.win.EmitEvent("cloud:delete-member", memberID)
+	if s.isOnline && s.emitter != nil {
+		s.emitter.EmitEvent("cloud:delete-member", memberID)
 	}
 }
 
@@ -258,24 +258,24 @@ func (s *PlannerService) cloudDeleteMember(memberID string) {
 // (e.g. called if a future reconnect-loop gives up). The JS handler updates
 // the UI and shows a warning toast.
 func (s *PlannerService) NotifyCloudDisconnected() {
-	if s.win != nil {
-		s.win.EmitEvent("plan:cloud-disconnected")
+	if s.emitter != nil {
+		s.emitter.EmitEvent("plan:cloud-disconnected")
 	}
 }
 
 // cloudSaveSettings emits only the settings portion of meta.
 func (s *PlannerService) cloudSaveSettings() {
-	if s.isOnline && s.win != nil && s.plan != nil {
-		s.win.EmitEvent("cloud:save-settings", s.plan.Settings)
+	if s.isOnline && s.emitter != nil && s.plan != nil {
+		s.emitter.EmitEvent("cloud:save-settings", s.plan.Settings)
 	}
 }
 func (s *PlannerService) cloudAppendActivity(entry domain.ActivityEntry) {
-	if s.isOnline && s.win != nil {
-		s.win.EmitEvent("cloud:append-activity", entry)
+	if s.isOnline && s.emitter != nil {
+		s.emitter.EmitEvent("cloud:append-activity", entry)
 	}
 }
 func (s *PlannerService) cloudToggleStaff(ev domain.Event, memberID string, action string) {
-	if s.isOnline && s.win != nil {
-		s.win.EmitEvent("cloud:toggle-staff", ev.ID, memberID, action == domain.ActionAssign)
+	if s.isOnline && s.emitter != nil {
+		s.emitter.EmitEvent("cloud:toggle-staff", ev.ID, memberID, action == domain.ActionAssign)
 	}
 }

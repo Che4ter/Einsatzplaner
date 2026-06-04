@@ -117,3 +117,110 @@ func TestNewYearPlan(t *testing.T) {
 		t.Errorf("Version = %d, want 1", plan.Version)
 	}
 }
+
+// ── normalise — via JSONStore.Load with hand-crafted minimal JSON ─────────────
+
+func TestNormalise_NilMonths_InitialisesAll12(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.json")
+	// JSON with no "months" key at all.
+	if err := os.WriteFile(path, []byte(`{"version":1,"year":2026}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := (&storage.JSONStore{}).Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for m := 1; m <= 12; m++ {
+		if plan.Months[m] == nil {
+			t.Errorf("month %d not initialised", m)
+		}
+		if plan.Months[m].Events == nil {
+			t.Errorf("month %d events nil", m)
+		}
+	}
+}
+
+func TestNormalise_NilTeam_InitialisesToEmptySlice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"year":2026}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := (&storage.JSONStore{}).Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if plan.Team == nil {
+		t.Error("Team should be non-nil empty slice, not nil")
+	}
+}
+
+func TestNormalise_NilActivityLog_InitialisesToEmptySlice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"year":2026}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := (&storage.JSONStore{}).Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if plan.ActivityLog == nil {
+		t.Error("ActivityLog should be non-nil empty slice, not nil")
+	}
+}
+
+func TestNormalise_NilLocations_InitialisesToEmptySlice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"year":2026,"settings":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := (&storage.JSONStore{}).Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if plan.Settings.Locations == nil {
+		t.Error("Settings.Locations should be non-nil empty slice, not nil")
+	}
+}
+
+func TestNormalise_InvalidMemberColor_Sanitized(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.json")
+	payload := `{"version":1,"year":2026,"team":[{"id":"m1","name":"Anna","color":"javascript:alert(1)","active":true}]}`
+	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := (&storage.JSONStore{}).Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(plan.Team) == 0 {
+		t.Fatal("expected one team member")
+	}
+	if plan.Team[0].Color == "javascript:alert(1)" {
+		t.Error("unsafe color must be sanitized on load")
+	}
+	if plan.Team[0].Color == "" {
+		t.Error("sanitized color must be a non-empty default, not empty string")
+	}
+}
+
+func TestNormalise_NullMonthEvents_InitialisesToEmptySlice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.json")
+	// Month present but events is null.
+	payload := `{"version":1,"year":2026,"months":{"3":{"events":null}}}`
+	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := (&storage.JSONStore{}).Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if plan.Months[3] == nil || plan.Months[3].Events == nil {
+		t.Error("month 3 events should be non-nil empty slice after normalise")
+	}
+}

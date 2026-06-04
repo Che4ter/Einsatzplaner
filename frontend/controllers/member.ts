@@ -5,50 +5,59 @@ import { TEAM_COLORS } from '../utils.js';
 import { showToast, showModal, closeModal } from '../ui.js';
 import { setDirtyUI } from './core.js';
 import { showSettingsPage } from './navigation.js';
+import { el, setText, hide } from '../dom.js';
 
 let _memberEditId: string | null = null;
 let _memberColor: string = TEAM_COLORS[0];
 
 export function openAddMember(): void {
+  const plan = state.plan;
+  if (!plan) return;
   _memberEditId = null;
-  _memberColor  = TEAM_COLORS[state.plan.team.length % TEAM_COLORS.length];
-  document.getElementById('modal-member-title')!.textContent = 'Person hinzufügen';
-  (document.getElementById('input-member-name') as HTMLInputElement).value = '';
-  (document.getElementById('input-member-exclude-hours') as HTMLInputElement).checked = false;
-  (document.getElementById('input-member-active') as HTMLInputElement).checked = true;
-  (document.getElementById('modal-member-active-row') as HTMLElement).style.display = 'none';
-  renderColorPicker(state.plan.team);
+  _memberColor  = TEAM_COLORS[plan.team.length % TEAM_COLORS.length];
+  setText('modal-member-title', 'Person hinzufügen');
+  el<HTMLInputElement>('input-member-name')!.value = '';
+  el<HTMLInputElement>('input-member-exclude-hours')!.checked = false;
+  el<HTMLInputElement>('input-member-active')!.checked = true;
+  hide('modal-member-active-row');
+  renderColorPicker(plan.team);
   showModal('modal-member');
 }
 
 export function openEditMember(id: string): void {
-  const m = state.plan.team.find((t: TeamMember) => t.id === id);
+  const plan = state.plan;
+  if (!plan) return;
+  const m = plan.team.find((t: TeamMember) => t.id === id);
   if (!m) return;
   _memberEditId = id;
   _memberColor  = m.color;
-  document.getElementById('modal-member-title')!.textContent = 'Person bearbeiten';
-  (document.getElementById('input-member-name') as HTMLInputElement).value = m.name;
-  (document.getElementById('input-member-exclude-hours') as HTMLInputElement).checked = !!m.excludeFromHours;
-  (document.getElementById('input-member-active') as HTMLInputElement).checked = !!m.active;
-  (document.getElementById('modal-member-active-row') as HTMLElement).style.display = 'flex';
-  renderColorPicker(state.plan.team);
+  setText('modal-member-title', 'Person bearbeiten');
+  el<HTMLInputElement>('input-member-name')!.value = m.name;
+  el<HTMLInputElement>('input-member-exclude-hours')!.checked = !!m.excludeFromHours;
+  el<HTMLInputElement>('input-member-active')!.checked = !!m.active;
+  const activeRow = el('modal-member-active-row');
+  if (activeRow) activeRow.style.display = 'flex';
+  renderColorPicker(plan.team);
   showModal('modal-member');
 }
 
 export async function confirmMemberModal(): Promise<void> {
-  const nameInput = document.getElementById('input-member-name') as HTMLInputElement;
-  const name = nameInput.value.trim();
+  const plan = state.plan;
+  if (!plan) return;
+  const nameInput = el<HTMLInputElement>('input-member-name');
+  const name = nameInput?.value.trim() ?? '';
   if (!name) {
-    nameInput.style.borderColor = 'var(--rose)';
+    if (nameInput) nameInput.style.borderColor = 'var(--rose)';
     return;
   }
   try {
-    const excludeFromHours = (document.getElementById('input-member-exclude-hours') as HTMLInputElement).checked;
+    const excludeFromHours = el<HTMLInputElement>('input-member-exclude-hours')?.checked ?? false;
     const active = _memberEditId
-      ? (document.getElementById('input-member-active') as HTMLInputElement).checked
+      ? (el<HTMLInputElement>('input-member-active')?.checked ?? false)
       : true;
     if (_memberEditId) {
-      const m = state.plan.team.find((t: TeamMember) => t.id === _memberEditId);
+      const m = plan.team.find((t: TeamMember) => t.id === _memberEditId);
+      if (!m) return;
       await Planner.UpdateMember({ ...m, name, color: _memberColor, excludeFromHours, active });
     } else {
       await Planner.CreateMember({ id: '', name, color: _memberColor, active: true, excludeFromHours });
@@ -86,9 +95,9 @@ export async function deleteMember(id: string): Promise<void> {
 
 export function renderColorPicker(team: TeamMember[]): void {
   const usedColors = new Set(team.map((m: TeamMember) => m.color));
-  const el = document.getElementById('member-color-picker');
-  if (!el) return;
-  el.innerHTML = TEAM_COLORS.map((c: string) =>
+  const picker = el('member-color-picker');
+  if (!picker) return;
+  picker.innerHTML = TEAM_COLORS.map((c: string) =>
     `<button type="button" class="color-swatch${c === _memberColor ? ' selected' : ''}"
       data-action="select-color" data-color="${c}"
       style="background:${c};${usedColors.has(c) && c !== _memberColor ? 'opacity:0.4' : ''}"></button>`
@@ -96,6 +105,8 @@ export function renderColorPicker(team: TeamMember[]): void {
 }
 
 export function selectColor(color: string): void {
+  const plan = state.plan;
+  if (!plan) return;
   _memberColor = color;
-  renderColorPicker(state.plan.team);
+  renderColorPicker(plan.team);
 }

@@ -42,6 +42,9 @@ jobs:
       - name: Run frontend unit tests
         run: npm test --prefix frontend
 
+      - name: Typecheck frontend
+        run: npm run typecheck --prefix frontend
+
   build-linux:
     needs: test
     runs-on: ubuntu-latest
@@ -65,7 +68,7 @@ jobs:
             build-essential
 
       - name: Install wails3 CLI
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.95
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.97
 
       - name: Generate JS bindings
         run: wails3 generate bindings -b -d frontend/bindings
@@ -108,7 +111,7 @@ jobs:
           node-version: '24'
 
       - name: Install wails3 CLI
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.95
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.97
 
       - name: Generate JS bindings
         run: wails3 generate bindings -b -d frontend/bindings
@@ -138,8 +141,61 @@ jobs:
           name: einsatzplaner-windows
           path: bin/einsatzplaner.exe
 
+  build-macos:
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install wails3 CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.97
+
+      - name: Generate JS bindings
+        run: wails3 generate bindings -b -d frontend/bindings
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: Build frontend
+        run: npm run build --prefix frontend
+
+      - name: Build universal binary (arm64 + amd64)
+        env:
+          FIRESTORE_PROJECT_ID: ${{ secrets.FIRESTORE_PROJECT_ID }}
+          FIRESTORE_API_KEY: ${{ secrets.FIRESTORE_API_KEY }}
+        run: |
+          LDFLAGS="-w -s \
+            -X main.Version=${{ github.ref_name }} \
+            -X main.FirestoreProjectID=${FIRESTORE_PROJECT_ID} \
+            -X main.FirestoreAPIKey=${FIRESTORE_API_KEY}"
+
+          GOARCH=arm64 go build -tags production \
+            -ldflags="${LDFLAGS}" \
+            -o bin/einsatzplaner-arm64 .
+
+          GOARCH=amd64 go build -tags production \
+            -ldflags="${LDFLAGS}" \
+            -o bin/einsatzplaner-amd64 .
+
+          lipo -create -output bin/einsatzplaner-macos \
+            bin/einsatzplaner-arm64 \
+            bin/einsatzplaner-amd64
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: einsatzplaner-macos
+          path: bin/einsatzplaner-macos
+
   release:
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -154,8 +210,15 @@ jobs:
           name: einsatzplaner-windows
           path: dist/windows
 
-      - name: Make Linux binary executable
-        run: chmod +x dist/linux/einsatzplaner
+      - uses: actions/download-artifact@v7
+        with:
+          name: einsatzplaner-macos
+          path: dist/macos
+
+      - name: Make binaries executable
+        run: |
+          chmod +x dist/linux/einsatzplaner
+          chmod +x dist/macos/einsatzplaner-macos
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -164,3 +227,4 @@ jobs:
           files: |
             dist/linux/einsatzplaner
             dist/windows/einsatzplaner.exe
+            dist/macos/einsatzplaner-macos

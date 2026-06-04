@@ -505,3 +505,68 @@ func TestGetPersonStats(t *testing.T) {
 		t.Errorf("Total = %d, want 3", ps.Total)
 	}
 }
+
+// ── ToggleMemberExcludeHours ─────────────────────────────────────────────────
+
+func TestToggleMemberExcludeHours_TogglesFlag(t *testing.T) {
+	svc, ms := newTestService()
+	mustLoadPlan(t, svc, ms)
+	if _, err := svc.CreateMember(context.Background(), domain.TeamMember{Name: "Anna", Color: "#0d9488", Active: true}); err != nil {
+		t.Fatalf("CreateMember: %v", err)
+	}
+	memberID := svc.GetPlan(context.Background()).Team[0].ID
+
+	if err := svc.ToggleMemberExcludeHours(context.Background(), memberID); err != nil {
+		t.Fatalf("ToggleMemberExcludeHours: %v", err)
+	}
+	if !svc.GetPlan(context.Background()).Team[0].ExcludeFromHours {
+		t.Error("ExcludeFromHours should be true after first toggle")
+	}
+
+	if err := svc.ToggleMemberExcludeHours(context.Background(), memberID); err != nil {
+		t.Fatalf("second ToggleMemberExcludeHours: %v", err)
+	}
+	if svc.GetPlan(context.Background()).Team[0].ExcludeFromHours {
+		t.Error("ExcludeFromHours should be false after second toggle")
+	}
+}
+
+func TestToggleMemberExcludeHours_UnknownMember_Error(t *testing.T) {
+	svc, ms := newTestService()
+	mustLoadPlan(t, svc, ms)
+	if err := svc.ToggleMemberExcludeHours(context.Background(), "ghost-id"); err == nil {
+		t.Error("expected error for unknown member")
+	}
+}
+
+// ── validateMonth / requirePlan error branches ────────────────────────────────
+
+func TestGetMonthEvents_InvalidMonth_ReturnsEmpty(t *testing.T) {
+	svc, ms := newTestService()
+	mustLoadPlan(t, svc, ms)
+	if got := svc.GetMonthEvents(context.Background(), 0); len(got) != 0 {
+		t.Errorf("month 0: expected empty slice, got %v", got)
+	}
+	if got := svc.GetMonthEvents(context.Background(), 13); len(got) != 0 {
+		t.Errorf("month 13: expected empty slice, got %v", got)
+	}
+}
+
+func TestGetMonthSummaries_NoPlan_ReturnsEmpty(t *testing.T) {
+	svc, _ := newTestService()
+	summaries := svc.GetMonthSummaries(context.Background())
+	if summaries == nil {
+		t.Error("expected non-nil map")
+	}
+	if len(summaries) != 0 {
+		t.Errorf("expected empty map without plan, got %v", summaries)
+	}
+}
+
+func TestCreateEvent_NoPlan_Error(t *testing.T) {
+	svc, _ := newTestService()
+	_, err := svc.CreateEvent(context.Background(), 3, domain.Event{Type: "wednesday", Date: "2026-03-04", TimeFrom: "14:00", TimeTo: "17:00", StaffRequired: 2})
+	if err == nil {
+		t.Error("expected error when no plan loaded")
+	}
+}

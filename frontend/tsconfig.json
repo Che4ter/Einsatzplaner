@@ -1,24 +1,25 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2024",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "allowJs": true,
     "checkJs": false,
-    "strict": false,
+    "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "paths": {
       "/wails/runtime.js": ["./types/wails-runtime.d.ts"]
     }
   },
   "include": [
-    "*.js",
     "*.ts",
-    "_tests/**/*.js",
-    "_tests/**/*.ts",
+    "controllers/**/*.ts",
+    "render/**/*.ts",
+    "sync/**/*.ts",
+    "_tests/**/*.{js,ts}",
     "types/**/*.ts"
   ],
   "exclude": [

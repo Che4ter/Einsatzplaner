@@ -46,7 +46,7 @@ export function initFirebase(projectId: string, apiKey: string): void {
   if (!projectId || !apiKey) { console.warn('Firebase credentials missing'); return; }
   const app = initializeApp({ projectId, apiKey });
   db = initializeFirestore(app, {
-    localCache: persistentLocalCache({ tabManager: persistentSingleTabManager() }),
+    localCache: persistentLocalCache({ tabManager: persistentSingleTabManager({}) }),
   });
 }
 

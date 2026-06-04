@@ -36,7 +36,7 @@ export function renderYearPage(
       if (!mo) continue;
       for (const e of (mo.events ?? [])) {
         if (e.isClosed) continue;
-        if (!(e.assignedStaff ?? []).includes(filterPerson)) continue;
+        if (!filterPerson || !(e.assignedStaff ?? []).includes(filterPerson)) continue;
         if (e.date >= todayStr && (!nextEvent || e.date < nextEvent.date)) nextEvent = e;
       }
     }

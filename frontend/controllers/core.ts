@@ -13,6 +13,7 @@ import {
 import { showToast, showConfirm } from '../ui.js';
 import { renderMonthNav } from '../render/index.js';
 import type { YearPlan } from '../services.js';
+import { el, setText, setHtml } from '../dom.js';
 
 // ── Autosave timer (module-private) ──────────────────────────────────────────
 
@@ -76,20 +77,19 @@ export function setDirtyUI(isDirty: boolean): void {
   // Never let local dirty/saved text overwrite it.
   if (state.online) return;
   state.dirty = isDirty;
-  const pill  = document.getElementById('save-state');
-  const label = document.getElementById('save-state-label');
+  const pill  = el('save-state');
   if (pill)  pill.classList.toggle('dirty', isDirty);
-  if (label) label.textContent = isDirty ? 'Ungespeichert' : 'Gespeichert';
-  const btnSave = document.getElementById('btn-save');
-  if (btnSave) (btnSave as HTMLButtonElement).disabled = !isDirty;
+  setText('save-state-label', isDirty ? 'Ungespeichert' : 'Gespeichert');
+  const btnSave = el<HTMLButtonElement>('btn-save');
+  if (btnSave) btnSave.disabled = !isDirty;
   if (isDirty) scheduleAutosave();
 }
 
 // ── External-change banner ────────────────────────────────────────────────────
 
 export function showExternalChangeBanner(hasDirty: boolean): void {
-  const banner = document.getElementById('external-change-banner');
-  const msg    = document.getElementById('external-change-msg');
+  const banner = el('external-change-banner');
+  const msg    = el('external-change-msg');
   if (!banner || !msg) return;
   msg.textContent = hasDirty
     ? 'Eine andere Person hat diese Datei geändert. Neu laden verwirft deine ungespeicherten Änderungen.'
@@ -99,7 +99,7 @@ export function showExternalChangeBanner(hasDirty: boolean): void {
 
 export function hideExternalChangeBanner(): void {
   setAutosavePaused(false);
-  const banner = document.getElementById('external-change-banner');
+  const banner = el('external-change-banner');
   if (banner) banner.style.display = 'none';
 }
 
@@ -107,7 +107,7 @@ export function hideExternalChangeBanner(): void {
 
 export function showPage(id: string): void {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  const page = document.getElementById('page-' + id);
+  const page = el('page-' + id);
   if (page) page.classList.add('active');
   state.currentPage = id;
 }
@@ -117,21 +117,17 @@ export function showPage(id: string): void {
 export function refreshSidebar(): void {
   if (!state.plan) return;
   Planner.GetMonthSummaries().then(summaries => {
-    const el = document.getElementById('nav-months');
-    if (el) el.innerHTML = renderMonthNav(state.plan!, summaries, state.currentMonth, state.currentPage);
+    setHtml('nav-months', renderMonthNav(state.plan!, summaries, state.currentMonth, state.currentPage));
   });
 }
 
 export function refreshSidebarSync(summaries: any): void {
-  const el = document.getElementById('nav-months');
-  if (el) el.innerHTML = renderMonthNav(state.plan!, summaries, state.currentMonth, state.currentPage);
+  setHtml('nav-months', renderMonthNav(state.plan!, summaries, state.currentMonth, state.currentPage));
 }
 
 export function updateSidebarMeta(plan: YearPlan): void {
   const teamName = plan.settings?.teamName;
-  const nameEl = document.getElementById('sidebar-team-name');
-  const yearEl = document.getElementById('sidebar-year-label');
-  if (nameEl) nameEl.textContent = teamName || 'Einsatzplan';
-  if (yearEl) yearEl.textContent = `Einsatzplan · ${plan.year}`;
+  setText('sidebar-team-name', teamName || 'Einsatzplan');
+  setText('sidebar-year-label', `Einsatzplan · ${plan.year}`);
   document.title = `Einsatzplan ${plan.year}`;
 }

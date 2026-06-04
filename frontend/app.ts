@@ -10,6 +10,7 @@ import {
   showToast, showModal, closeModal, wireConfirmButtons, cancelConfirm,
 } from './ui.js';
 import { state, setAutosavePaused } from './state.js';
+import { el, on, setText, show, hide } from './dom.js';
 
 // ── Controllers ───────────────────────────────────────────────────────────────
 import {
@@ -22,7 +23,7 @@ import {
 } from './controllers/navigation.js';
 import {
   onPlanLoaded, applyReloadedPlan, refreshCurrentPage,
-  cmdOpen, cmdSave, handleExternalChange, tryRestoreLastFile,
+  cmdOpen, cmdSave, cmdClose, handleExternalChange, tryRestoreLastFile,
 } from './controllers/fileops.js';
 import {
   setEventFromPage, openAddEvent, openEditEvent,
@@ -42,13 +43,14 @@ import {
 } from './controllers/time.js';
 import {
   openExportModal, doExportICal, doExportPDF, doExportJSON,
-  setExportTab, toggleExportPerson, selectAllExportPersons, clearExportPersons,
+  getExportTab, setExportTab, toggleExportPerson, selectAllExportPersons, clearExportPersons,
   toggleExportMonth, toggleExportPrep, setExportMonthPreset,
 } from './controllers/export.js';
 import {
   applyCloudStatus, updateCloudWritePill,
   renderWelcomeCloudRecent, openConnectModal, doConnect, doLoadCloudYear,
   doDisconnect, resetNewYearModal, pickTemplateFile, confirmNewYearWithCloud,
+  renderNewYearRecentRooms, initNewYearUseLast, toggleUseLastPlan,
 } from './controllers/cloud.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -158,30 +160,30 @@ document.addEventListener('click', (e: MouseEvent) => {
 });
 
 // Staff stepper
-document.getElementById('btn-staff-dec')?.addEventListener('click', () => {
-  const inp = document.getElementById('event-staff-required') as HTMLInputElement;
+on('btn-staff-dec', 'click', () => {
+  const inp = el<HTMLInputElement>('event-staff-required');
+  if (!inp) return;
   const cur = parseInt(inp.value, 10) || 0;
   if (cur > 0) {
     inp.value = String(cur - 1);
-    const disp = document.getElementById('event-staff-display');
-    if (disp) disp.textContent = String(cur - 1);
+    setText('event-staff-display', String(cur - 1));
     updateStaffSummary();
   }
 });
-document.getElementById('btn-staff-inc')?.addEventListener('click', () => {
-  const inp = document.getElementById('event-staff-required') as HTMLInputElement;
+on('btn-staff-inc', 'click', () => {
+  const inp = el<HTMLInputElement>('event-staff-required');
+  if (!inp) return;
   const cur = parseInt(inp.value, 10) || 0;
   inp.value = String(cur + 1);
-  const disp = document.getElementById('event-staff-display');
-  if (disp) disp.textContent = String(cur + 1);
+  setText('event-staff-display', String(cur + 1));
   updateStaffSummary();
 });
 
 // Closed checkbox toggle
-document.getElementById('event-is-closed')?.addEventListener('change', (e: Event) => {
+on('event-is-closed', 'change', (e: Event) => {
   const checked = (e.target as HTMLInputElement).checked;
-  const fields = document.getElementById('event-fields');
-  const label  = document.getElementById('event-closed-label');
+  const fields = el('event-fields');
+  const label  = el('event-closed-label');
   if (fields) fields.style.display = checked ? 'none' : '';
   if (label)  label.classList.toggle('is-closed', checked);
 });
@@ -190,12 +192,11 @@ document.getElementById('event-is-closed')?.addEventListener('change', (e: Event
 Events.On('plan:file-changed-externally', handleExternalChange);
 
 // Toolbar buttons
-document.getElementById('btn-new')?.addEventListener('click', () => { resetNewYearModal(); showModal('modal-new-year'); });
-document.getElementById('btn-open')?.addEventListener('click', cmdOpen);
-document.getElementById('btn-save')?.addEventListener('click', cmdSave);
+on('btn-save', 'click', cmdSave);
+on('btn-close', 'click', cmdClose);
 
 // Banner buttons
-document.getElementById('btn-reload-plan')?.addEventListener('click', async () => {
+on('btn-reload-plan', 'click', async () => {
   hideExternalChangeBanner();
   setAutosavePaused(false);
   try {
@@ -206,53 +207,54 @@ document.getElementById('btn-reload-plan')?.addEventListener('click', async () =
     showToast('Fehler beim Neu laden: ' + e, 'error');
   }
 });
-document.getElementById('btn-dismiss-banner')?.addEventListener('click', hideExternalChangeBanner);
-document.getElementById('btn-welcome-new')?.addEventListener('click', () => { resetNewYearModal(); showModal('modal-new-year'); });
-document.getElementById('btn-welcome-open')?.addEventListener('click', cmdOpen);
+on('btn-dismiss-banner', 'click', hideExternalChangeBanner);
+on('btn-welcome-new', 'click', () => { resetNewYearModal(); initNewYearUseLast(); showModal('modal-new-year'); });
+on('btn-welcome-open', 'click', openConnectModal);
 
 // Export button
-document.getElementById('btn-export')?.addEventListener('click', () => {
+on('btn-export', 'click', () => {
   if (!state.plan) return;
   openExportModal();
 });
 
 // Admin nav buttons
-document.getElementById('nav-btn-settings')?.addEventListener('click', showSettingsPage);
-document.getElementById('nav-btn-statistics')?.addEventListener('click', () => {
+on('nav-btn-settings', 'click', showSettingsPage);
+on('nav-btn-statistics', 'click', () => {
   state.statsMonth = 0;
   showStatisticsPage();
 });
-document.getElementById('nav-btn-verlauf')?.addEventListener('click', showVerlaufPage);
-document.getElementById('nav-btn-year')?.addEventListener('click', () => {
+on('nav-btn-verlauf', 'click', showVerlaufPage);
+on('nav-btn-year', 'click', () => {
   state.yearPerson = null;
   showYearPage();
 });
 
 // Modal footers
-document.getElementById('btn-modal-export-close')?.addEventListener('click',  () => closeModal('modal-export'));
-document.getElementById('btn-modal-export-cancel')?.addEventListener('click', () => closeModal('modal-export'));
-document.getElementById('btn-export-confirm')?.addEventListener('click', () => {
-  const tab = document.querySelector<HTMLElement>('.export-tab.active')?.dataset.tab ?? 'ical';
+on('btn-modal-export-close',  'click', () => closeModal('modal-export'));
+on('btn-modal-export-cancel', 'click', () => closeModal('modal-export'));
+on('btn-export-confirm', 'click', () => {
+  const tab = getExportTab();
   if (tab === 'json') { doExportJSON(); return; }
   if (tab === 'ical') doExportICal();
   else doExportPDF();
 });
-document.getElementById('btn-modal-event-confirm')?.addEventListener('click', confirmEventModal);
-document.getElementById('btn-modal-event-delete')?.addEventListener('click',  deleteEventModal);
-document.getElementById('btn-modal-event-cancel')?.addEventListener('click',  () => closeModal('modal-event'));
-document.getElementById('btn-modal-event-cancel2')?.addEventListener('click', () => closeModal('modal-event'));
-document.getElementById('btn-modal-member-confirm')?.addEventListener('click', confirmMemberModal);
-document.getElementById('btn-modal-member-cancel')?.addEventListener('click',  () => closeModal('modal-member'));
-document.getElementById('btn-modal-member-cancel2')?.addEventListener('click', () => closeModal('modal-member'));
-document.getElementById('btn-modal-location-confirm')?.addEventListener('click', confirmLocationModal);
-document.getElementById('btn-modal-location-cancel')?.addEventListener('click',  () => closeModal('modal-location'));
-document.getElementById('btn-modal-location-cancel2')?.addEventListener('click', () => closeModal('modal-location'));
-document.getElementById('btn-modal-time-confirm')?.addEventListener('click', confirmTimeModal);
-document.getElementById('btn-modal-time-cancel')?.addEventListener('click',  () => closeModal('modal-time'));
-document.getElementById('btn-modal-time-cancel2')?.addEventListener('click', () => closeModal('modal-time'));
-document.getElementById('btn-modal-new-confirm')?.addEventListener('click', confirmNewYearWithCloud);
-document.getElementById('btn-modal-new-cancel')?.addEventListener('click',  () => { resetNewYearModal(); closeModal('modal-new-year'); });
-document.getElementById('btn-pick-template')?.addEventListener('click', pickTemplateFile);
+on('btn-modal-event-confirm', 'click', confirmEventModal);
+on('btn-modal-event-delete',  'click', deleteEventModal);
+on('btn-modal-event-cancel',  'click', () => closeModal('modal-event'));
+on('btn-modal-event-cancel2', 'click', () => closeModal('modal-event'));
+on('btn-modal-member-confirm', 'click', confirmMemberModal);
+on('btn-modal-member-cancel',  'click', () => closeModal('modal-member'));
+on('btn-modal-member-cancel2', 'click', () => closeModal('modal-member'));
+on('btn-modal-location-confirm', 'click', confirmLocationModal);
+on('btn-modal-location-cancel',  'click', () => closeModal('modal-location'));
+on('btn-modal-location-cancel2', 'click', () => closeModal('modal-location'));
+on('btn-modal-time-confirm', 'click', confirmTimeModal);
+on('btn-modal-time-cancel',  'click', () => closeModal('modal-time'));
+on('btn-modal-time-cancel2', 'click', () => closeModal('modal-time'));
+on('btn-modal-new-confirm', 'click', confirmNewYearWithCloud);
+on('btn-modal-new-cancel',  'click', () => { resetNewYearModal(); closeModal('modal-new-year'); });
+on('btn-pick-template', 'click', pickTemplateFile);
+on('btn-connect-open-file', 'click', async () => { closeModal('modal-connect'); await cmdOpen(); });
 
 // Keyboard shortcuts
 document.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -363,49 +365,62 @@ Events.On('plan:cloud-disconnected', async () => {
 
 // ── Cloud modal buttons ───────────────────────────────────────────────────────
 
-document.getElementById('btn-connect')?.addEventListener('click', openConnectModal);
-document.getElementById('btn-welcome-cloud')?.addEventListener('click', openConnectModal);
-document.getElementById('btn-modal-connect-close')?.addEventListener('click',  () => { FirebaseSync.disconnectFromCloud(); closeModal('modal-connect'); });
-document.getElementById('btn-modal-connect-cancel')?.addEventListener('click', () => { FirebaseSync.disconnectFromCloud(); closeModal('modal-connect'); });
-document.getElementById('btn-modal-connect-confirm')?.addEventListener('click', doConnect);
-document.getElementById('btn-load-cloud-year')?.addEventListener('click', doLoadCloudYear);
-document.getElementById('btn-disconnect')?.addEventListener('click', doDisconnect);
+on('btn-pill-reconnect', 'click', async () => {
+  const roomCode = state.cloudRoomCode;
+  const plan = state.plan;
+  if (!roomCode || !plan) return;
+  try {
+    const reconnected = await FirebaseSync.connectToCloud(roomCode, plan.year);
+    if (reconnected) {
+      applyCloudStatus(await Planner.GetCloudStatus());
+      showToast('Neu verbunden.', 'success');
+    }
+  } catch (e) {
+    showToast('Verbindung fehlgeschlagen: ' + e, 'error');
+  }
+});
+on('btn-modal-connect-close',  'click', () => { if (!state.online) FirebaseSync.disconnectFromCloud(); closeModal('modal-connect'); });
+on('btn-modal-connect-cancel', 'click', () => { if (!state.online) FirebaseSync.disconnectFromCloud(); closeModal('modal-connect'); });
+on('btn-modal-connect-confirm', 'click', doConnect);
+on('btn-load-cloud-year', 'click', doLoadCloudYear);
+on('btn-disconnect', 'click', doDisconnect);
 
 // Generate room code in new-year modal
-document.getElementById('btn-new-year-generate-code')?.addEventListener('click', async () => {
+on('btn-new-year-generate-code', 'click', async () => {
   try {
     const code = await Planner.GenerateRoomCode();
-    const inp = document.getElementById('new-year-room-code') as HTMLInputElement | null;
+    const inp = el<HTMLInputElement>('new-year-room-code');
     if (inp) inp.value = code;
   } catch { /* ignore */ }
 });
 
 // Show/hide cloud sub-rows when storage type changes in new-year modal
-document.getElementById('new-year-cloud')?.addEventListener('change', () => {
-  const codeRow = document.getElementById('new-year-cloud-code-row');
-  const connRow = document.getElementById('new-year-cloud-connected-row');
+on('new-year-cloud', 'change', () => {
+  const codeRow = el('new-year-cloud-code-row');
+  const connRow = el('new-year-cloud-connected-row');
   if (state.online) {
     if (codeRow) codeRow.style.display = 'none';
     if (connRow) {
       connRow.style.display = '';
-      const sp = document.getElementById('new-year-current-room-code');
-      if (sp) sp.textContent = state.cloudRoomCode;
+      setText('new-year-current-room-code', state.cloudRoomCode);
     }
   } else {
     if (codeRow) codeRow.style.display = '';
     if (connRow) connRow.style.display = 'none';
+    renderNewYearRecentRooms();
   }
 });
-document.getElementById('new-year-local')?.addEventListener('change', () => {
-  const codeRow = document.getElementById('new-year-cloud-code-row');
-  if (codeRow) codeRow.style.display = 'none';
-  const connRow = document.getElementById('new-year-cloud-connected-row');
-  if (connRow) connRow.style.display = 'none';
+on('new-year-local', 'change', () => {
+  hide('new-year-cloud-code-row');
+  hide('new-year-cloud-connected-row');
+});
+on('new-year-use-last', 'change', (e: Event) => {
+  toggleUseLastPlan((e.target as HTMLInputElement).checked);
 });
 
 // Escape key closes cloud connect modal
 document.addEventListener('keydown', (e: KeyboardEvent) => {
-  if (e.key === 'Escape') { FirebaseSync.disconnectFromCloud(); closeModal('modal-connect'); }
+  if (e.key === 'Escape') { if (!state.online) FirebaseSync.disconnectFromCloud(); closeModal('modal-connect'); }
 }, { capture: false });
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
@@ -415,8 +430,7 @@ wireOutboundRelay();
 onWriteStateChange(() => updateCloudWritePill());
 
 Planner.GetVersion().then(v => {
-  const el = document.getElementById('sb-version');
-  if (el) el.textContent = v;
+  setText('sb-version', v);
 }).catch(() => {});
 
 Planner.GetCloudStatus().then(status => {
@@ -429,11 +443,11 @@ Planner.GetCloudStatus().then(status => {
 
 Planner.CheckForUpdate().then((newTag: string | null) => {
   if (!newTag) return;
-  const link = document.getElementById('update-link') as HTMLAnchorElement | null;
+  const link = el<HTMLAnchorElement>('update-link');
   if (!link) return;
   link.textContent = 'Update verfügbar (' + newTag + ')';
   const releaseURL = 'https://github.com/Che4ter/Einsatzplaner/releases/tag/' + encodeURIComponent(newTag);
-  link.style.display = '';
+  show('update-link');
   link.addEventListener('click', (e: MouseEvent) => {
     e.preventDefault();
     Planner.OpenURL(releaseURL).catch(() => {});

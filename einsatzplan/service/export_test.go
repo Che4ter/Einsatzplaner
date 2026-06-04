@@ -232,3 +232,48 @@ func date(s string) time.Time {
 	}
 	return d
 }
+// ── icalFold ─────────────────────────────────────────────────────────────────
+
+func TestIcalFold_ShortLine_NoFolding(t *testing.T) {
+	in := "SUMMARY:Hello"
+	got := icalFold(in)
+	// Short lines must pass through unchanged.
+	if got != in+"\r\n" {
+		t.Errorf("icalFold(%q) = %q, want unchanged + CRLF", in, got)
+	}
+}
+
+func TestIcalFold_ExactlyAtLimit_NoFolding(t *testing.T) {
+	// 75 bytes — the limit is ≤75 on the first line, so this must NOT fold.
+	in := strings.Repeat("A", 75)
+	got := icalFold(in)
+	if strings.Contains(got, "\r\n ") {
+		t.Errorf("icalFold: unexpected fold in 75-byte line: %q", got)
+	}
+}
+
+func TestIcalFold_LongLine_FoldsAt75(t *testing.T) {
+	// 150 chars — must produce a continuation fold.
+	in := strings.Repeat("X", 150)
+	got := icalFold(in)
+	// RFC 5545: long line split with CRLF + SPACE continuation.
+	if !strings.Contains(got, "\r\n ") {
+		t.Errorf("icalFold: expected CRLF+SPACE continuation for 150-char line; got:\n%q", got)
+	}
+	// Reassembled content must equal the original.
+	reassembled := strings.ReplaceAll(got, "\r\n ", "")
+	reassembled = strings.TrimRight(reassembled, "\r\n")
+	if reassembled != in {
+		t.Errorf("icalFold: reassembled content mismatch\nwant: %q\ngot:  %q", in, reassembled)
+	}
+}
+
+func TestIcalFold_VeryLongLine_MultipleWraps(t *testing.T) {
+	// 300 chars — needs at least 3 lines.
+	in := strings.Repeat("Y", 300)
+	got := icalFold(in)
+	lineCount := strings.Count(got, "\r\n")
+	if lineCount < 3 {
+		t.Errorf("icalFold: expected >=3 CRLF for 300-char line, got %d", lineCount)
+	}
+}

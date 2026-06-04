@@ -1,11 +1,12 @@
 import * as Planner from '../services.js';
-import type { TeamMember, TimePreset } from '../services.js';
+import type { Event as PlanEvent, TeamMember, TimePreset } from '../services.js';
 import { state } from '../state.js';
 import { MONATE, WEEKDAY_LONG, esc, getMonth } from '../utils.js';
 import { renderQAPopover } from '../render/index.js';
 import { showToast, showModal, closeModal } from '../ui.js';
 import { setDirtyUI } from './core.js';
 import { navigateToMonth, showYearPage } from './navigation.js';
+import { el, setText, val } from '../dom.js';
 
 let _eventId: string | null       = null;
 let _eventMonth: number | null    = null;
@@ -22,45 +23,49 @@ export async function openAddEvent(type: string, date: string, month: number): P
   _eventDate  = date || '';
   _eventFromPage = null;
 
-  document.getElementById('modal-event-title')!.textContent = 'Einsatz hinzufügen';
-  (document.getElementById('btn-modal-event-delete') as HTMLElement).style.display = 'none';
-  (document.getElementById('event-is-closed') as HTMLInputElement).checked = false;
-  (document.getElementById('event-fields') as HTMLElement).style.display = '';
+  setText('modal-event-title', 'Einsatz hinzufügen');
+  el('btn-modal-event-delete')!.style.display = 'none';
+  el<HTMLInputElement>('event-is-closed')!.checked = false;
+  el('event-fields')!.style.display = '';
 
-  const dateRow      = document.getElementById('event-date-row')!;
-  const dateEndGroup = document.getElementById('event-date-end-group')!;
+  const plan = state.plan;
+  if (!plan) return;
+
+  const dateRow      = el('event-date-row')!;
+  const dateEndGroup = el('event-date-end-group')!;
   if (date) {
     dateRow.style.display = 'none';
     const d = new Date(date + 'T00:00:00');
-    document.getElementById('event-display-weekday')!.textContent = WEEKDAY_LONG[d.getDay()];
-    document.getElementById('event-display-date')!.textContent =
-      `${d.getDate()}. ${MONATE[d.getMonth()]} ${state.plan.year}`;
+    setText('event-display-weekday', WEEKDAY_LONG[d.getDay()]);
+    setText('event-display-date', `${d.getDate()}. ${MONATE[d.getMonth()]} ${plan.year}`);
   } else {
     dateRow.style.display = '';
-    (document.getElementById('event-date-input') as HTMLInputElement).value = '';
-    document.getElementById('event-display-weekday')!.textContent = '';
-    document.getElementById('event-display-date')!.textContent = type === 'weekend' ? 'Wochenende' : 'Wochentag';
+    el<HTMLInputElement>('event-date-input')!.value = '';
+    setText('event-display-weekday', '');
+    setText('event-display-date', type === 'weekend' ? 'Wochenende' : 'Wochentag');
   }
   dateEndGroup.style.display = type === 'weekend' ? '' : 'none';
-  if (type !== 'weekend') (document.getElementById('event-date-end-input') as HTMLInputElement).value = '';
+  if (type !== 'weekend') el<HTMLInputElement>('event-date-end-input')!.value = '';
 
-  (document.getElementById('event-location') as HTMLInputElement).value       = '';
-  (document.getElementById('event-time-from') as HTMLInputElement).value      = '';
-  (document.getElementById('event-time-to') as HTMLInputElement).value        = '';
-  (document.getElementById('event-time-setup') as HTMLInputElement).value     = '';
-  (document.getElementById('event-time-teardown') as HTMLInputElement).value  = '';
-  (document.getElementById('event-staff-required') as HTMLInputElement).value = '2';
-  document.getElementById('event-staff-display')!.textContent = '2';
-  (document.getElementById('event-comment') as HTMLTextAreaElement).value = '';
+  el<HTMLInputElement>('event-location')!.value       = '';
+  el<HTMLInputElement>('event-time-from')!.value      = '';
+  el<HTMLInputElement>('event-time-to')!.value        = '';
+  el<HTMLInputElement>('event-time-setup')!.value     = '';
+  el<HTMLInputElement>('event-time-teardown')!.value  = '';
+  el<HTMLInputElement>('event-staff-required')!.value = '2';
+  setText('event-staff-display', '2');
+  el<HTMLTextAreaElement>('event-comment')!.value = '';
 
-  populateLocationDatalist(state.plan.settings.locations ?? []);
-  populateTimePresets(state.plan.settings.defaultTimes ?? []);
-  populateStaffList(state.plan.team, []);
+  populateLocationDatalist(plan.settings.locations ?? []);
+  populateTimePresets(plan.settings.defaultTimes ?? []);
+  populateStaffList(plan.team, []);
   showModal('modal-event');
 }
 
 export async function openEditEvent(eventId: string, month: number): Promise<void> {
-  const events = getMonth(state.plan, month)?.events ?? [];
+  const plan = state.plan;
+  if (!plan) return;
+  const events = getMonth(plan, month)?.events ?? [];
   const ev = events.find((e: any) => e.id === eventId);
   if (!ev) return;
 
@@ -69,47 +74,48 @@ export async function openEditEvent(eventId: string, month: number): Promise<voi
   _eventType  = ev.type;
   _eventDate  = ev.date;
 
-  document.getElementById('modal-event-title')!.textContent = 'Einsatz bearbeiten';
-  (document.getElementById('btn-modal-event-delete') as HTMLElement).style.display = '';
-  (document.getElementById('event-date-row') as HTMLElement).style.display = 'none';
-  (document.getElementById('event-is-closed') as HTMLInputElement).checked = ev.isClosed;
-  (document.getElementById('event-fields') as HTMLElement).style.display = ev.isClosed ? 'none' : '';
-  document.getElementById('event-closed-label')!.classList.toggle('is-closed', ev.isClosed);
+  setText('modal-event-title', 'Einsatz bearbeiten');
+  el('btn-modal-event-delete')!.style.display = '';
+  el('event-date-row')!.style.display = 'none';
+  el<HTMLInputElement>('event-is-closed')!.checked = ev.isClosed;
+  el('event-fields')!.style.display = ev.isClosed ? 'none' : '';
+  el('event-closed-label')!.classList.toggle('is-closed', ev.isClosed);
 
   const d = new Date(ev.date + 'T00:00:00');
-  document.getElementById('event-display-weekday')!.textContent = WEEKDAY_LONG[d.getDay()];
-  document.getElementById('event-display-date')!.textContent =
-    `${d.getDate()}. ${MONATE[d.getMonth()]} ${state.plan.year}`;
+  setText('event-display-weekday', WEEKDAY_LONG[d.getDay()]);
+  setText('event-display-date', `${d.getDate()}. ${MONATE[d.getMonth()]} ${plan.year}`);
 
-  (document.getElementById('event-location') as HTMLInputElement).value      = ev.location      ?? '';
-  (document.getElementById('event-time-from') as HTMLInputElement).value     = ev.timeFrom      ?? '';
-  (document.getElementById('event-time-to') as HTMLInputElement).value       = ev.timeTo        ?? '';
-  (document.getElementById('event-time-setup') as HTMLInputElement).value    = ev.timeSetup     ?? '';
-  (document.getElementById('event-time-teardown') as HTMLInputElement).value = ev.timeTeardown  ?? '';
+  el<HTMLInputElement>('event-location')!.value      = ev.location      ?? '';
+  el<HTMLInputElement>('event-time-from')!.value     = ev.timeFrom      ?? '';
+  el<HTMLInputElement>('event-time-to')!.value       = ev.timeTo        ?? '';
+  el<HTMLInputElement>('event-time-setup')!.value    = ev.timeSetup     ?? '';
+  el<HTMLInputElement>('event-time-teardown')!.value = ev.timeTeardown  ?? '';
   const need = ev.staffRequired ?? 0;
-  (document.getElementById('event-staff-required') as HTMLInputElement).value = need;
-  document.getElementById('event-staff-display')!.textContent = need;
-  (document.getElementById('event-comment') as HTMLTextAreaElement).value = ev.comment ?? '';
-  (document.getElementById('event-date-end-group') as HTMLElement).style.display = ev.type === 'weekend' ? '' : 'none';
-  (document.getElementById('event-date-end-input') as HTMLInputElement).value = ev.dateEnd ?? '';
+  el<HTMLInputElement>('event-staff-required')!.value = String(need);
+  setText('event-staff-display', String(need));
+  el<HTMLTextAreaElement>('event-comment')!.value = ev.comment ?? '';
+  el('event-date-end-group')!.style.display = ev.type === 'weekend' ? '' : 'none';
+  el<HTMLInputElement>('event-date-end-input')!.value = ev.dateEnd ?? '';
 
-  populateLocationDatalist(state.plan.settings.locations ?? []);
-  populateTimePresets(state.plan.settings.defaultTimes ?? []);
-  populateStaffList(state.plan.team, ev.assignedStaff ?? []);
+  populateLocationDatalist(plan.settings.locations ?? []);
+  populateTimePresets(plan.settings.defaultTimes ?? []);
+  populateStaffList(plan.team, ev.assignedStaff ?? []);
   showModal('modal-event');
 }
 
 export async function confirmEventModal(): Promise<void> {
-  const isClosed     = (document.getElementById('event-is-closed') as HTMLInputElement).checked;
-  const location     = (document.getElementById('event-location') as HTMLInputElement).value.trim();
-  const timeFrom     = (document.getElementById('event-time-from') as HTMLInputElement).value;
-  const timeTo       = (document.getElementById('event-time-to') as HTMLInputElement).value;
-  const timeSetup    = (document.getElementById('event-time-setup') as HTMLInputElement).value    || '';
-  const timeTeardown = (document.getElementById('event-time-teardown') as HTMLInputElement).value || '';
-  const need         = parseInt((document.getElementById('event-staff-required') as HTMLInputElement).value, 10) || 0;
-  const comment      = (document.getElementById('event-comment') as HTMLTextAreaElement).value.trim();
-  const date         = _eventDate || (document.getElementById('event-date-input') as HTMLInputElement).value;
-  const dateEnd      = (document.getElementById('event-date-end-input') as HTMLInputElement)?.value || '';
+  const plan = state.plan;
+  if (!plan) return;
+  const isClosed     = el<HTMLInputElement>('event-is-closed')!.checked;
+  const location     = val('event-location').trim();
+  const timeFrom     = val('event-time-from');
+  const timeTo       = val('event-time-to');
+  const timeSetup    = val('event-time-setup');
+  const timeTeardown = val('event-time-teardown');
+  const need         = parseInt(val('event-staff-required'), 10) || 0;
+  const comment      = val('event-comment').trim();
+  const date         = _eventDate || val('event-date-input');
+  const dateEnd      = val('event-date-end-input');
 
   if (!isClosed && !date) {
     showToast('Datum fehlt', 'error');
@@ -120,7 +126,8 @@ export async function confirmEventModal(): Promise<void> {
 
   const ev = {
     id:            _eventId ?? '',
-    type:          _eventType,
+    month:         _eventMonth!,
+    type:          _eventType! as PlanEvent['type'],
     date:          date,
     dateEnd:       dateEnd,
     isClosed:      isClosed,
@@ -140,8 +147,8 @@ export async function confirmEventModal(): Promise<void> {
     } else {
       await Planner.CreateEvent(_eventMonth!, ev);
     }
-    if (location && !(state.plan.settings.locations ?? []).includes(location)) {
-      const newSettings = { ...state.plan.settings, locations: [...(state.plan.settings.locations ?? []), location] };
+    if (location && !(plan.settings.locations ?? []).includes(location)) {
+      const newSettings = { ...plan.settings, locations: [...(plan.settings.locations ?? []), location] };
       await Planner.UpdateSettings(newSettings);
     }
     state.plan = await Planner.GetPlan();
@@ -172,14 +179,16 @@ let _qaEventId: string | null = null;
 let _qaMonth: number | null   = null;
 
 export async function openQA(eventId: string, month: number, anchorEl: Element): Promise<void> {
+  const plan = state.plan;
+  if (!plan) return;
   _qaEventId = eventId;
   _qaMonth   = month;
-  const events = getMonth(state.plan, month)?.events ?? [];
+  const events = getMonth(plan, month)?.events ?? [];
   const ev = events.find((e: any) => e.id === eventId);
   if (!ev) return;
 
-  const pop = document.getElementById('qa-popover')!;
-  pop.innerHTML = renderQAPopover(state.plan.team, ev.assignedStaff ?? [], eventId, month);
+  const pop = el('qa-popover')!;
+  pop.innerHTML = renderQAPopover(plan.team, ev.assignedStaff ?? [], eventId, month);
   pop.style.display = 'block';
 
   const rect  = anchorEl.getBoundingClientRect();
@@ -197,7 +206,7 @@ export async function qaToggle(memberId: string, eventId: string, month: number)
     await Planner.ToggleStaff(month, eventId, memberId);
     state.plan = await Planner.GetPlan();
     setDirtyUI(true);
-    const qa = document.getElementById('qa-popover');
+    const qa = el('qa-popover');
     if (qa) qa.style.display = 'none';
     await navigateToMonth(month);
   } catch (e) {
@@ -210,13 +219,14 @@ let _locACWired = false;
 
 export function populateLocationDatalist(locations: string[]): void {
   _locationOptions = locations ?? [];
+  _locACWired = false;  // reset so the new DOM element gets wired each time the modal opens
   wireLocationAC();
 }
 
 function wireLocationAC(): void {
   if (_locACWired) return;
-  const input = document.getElementById('event-location') as HTMLInputElement | null;
-  const drop  = document.getElementById('event-location-drop') as HTMLElement | null;
+  const input = el<HTMLInputElement>('event-location');
+  const drop  = el('event-location-drop');
   if (!input || !drop) return;
   _locACWired = true;
 
@@ -278,9 +288,9 @@ function wireLocationAC(): void {
 }
 
 export function populateTimePresets(times: TimePreset[]): void {
-  const el = document.getElementById('event-time-presets');
-  if (!el) return;
-  el.innerHTML = times.map((t, i) => {
+  const presetsEl = el('event-time-presets');
+  if (!presetsEl) return;
+  presetsEl.innerHTML = times.map((t, i) => {
     const SVG_R = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h13M12 7l5 5-5 5"/></svg>`;
     const SVG_L = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12H7M12 7l-5 5 5 5"/></svg>`;
     const pre      = t.timeSetup    ? `<span class="ev-edge">${SVG_R}${esc(t.timeSetup)}</span>` : '';
@@ -296,16 +306,16 @@ export function populateTimePresets(times: TimePreset[]): void {
 export function applyTimePreset(index: number): void {
   const t = state.plan?.settings?.defaultTimes?.[index];
   if (!t) return;
-  (document.getElementById('event-time-from') as HTMLInputElement).value     = t.from          ?? '';
-  (document.getElementById('event-time-to') as HTMLInputElement).value       = t.to            ?? '';
-  (document.getElementById('event-time-setup') as HTMLInputElement).value    = t.timeSetup     ?? '';
-  (document.getElementById('event-time-teardown') as HTMLInputElement).value = t.timeTeardown  ?? '';
+  el<HTMLInputElement>('event-time-from')!.value     = t.from         ?? '';
+  el<HTMLInputElement>('event-time-to')!.value       = t.to           ?? '';
+  el<HTMLInputElement>('event-time-setup')!.value    = t.timeSetup    ?? '';
+  el<HTMLInputElement>('event-time-teardown')!.value = t.timeTeardown ?? '';
 }
 
 export function populateStaffList(team: TeamMember[], assigned: string[]): void {
-  const el = document.getElementById('event-staff-list');
-  if (!el) return;
-  el.innerHTML = team.filter(m => m.active).slice().sort((a, b) => a.name.localeCompare(b.name)).map(m => {
+  const staffListEl = el('event-staff-list');
+  if (!staffListEl) return;
+  staffListEl.innerHTML = team.filter(m => m.active).slice().sort((a, b) => a.name.localeCompare(b.name)).map(m => {
     const on = assigned.includes(m.id);
     return `<button type="button"
       class="staff-pick${on ? ' on' : ''}"
@@ -322,7 +332,6 @@ export function populateStaffList(team: TeamMember[], assigned: string[]): void 
 
 export function updateStaffSummary(): void {
   const assigned = document.querySelectorAll('.staff-pick.on').length;
-  const need     = parseInt((document.getElementById('event-staff-required') as HTMLInputElement).value, 10) || 0;
-  const el       = document.getElementById('event-staff-summary');
-  if (el) el.textContent = `${assigned} von ${need} zugeteilt`;
+  const need     = parseInt(val('event-staff-required'), 10) || 0;
+  setText('event-staff-summary', `${assigned} von ${need} zugeteilt`);
 }

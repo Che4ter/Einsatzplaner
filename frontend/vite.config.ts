@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, type Plugin } from 'vitest/config';
 
 // The Wails runtime is served by the Go asset server at /wails/runtime.js and
 // must NOT be bundled. In test mode we redirect it to a stub instead.
@@ -26,6 +26,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    target: 'es2025',
     // Desktop app — no chunk-size budget needed.
     chunkSizeWarningLimit: 2000,
   },

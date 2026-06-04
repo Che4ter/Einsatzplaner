@@ -12,6 +12,7 @@ import {
   renderYearPage,
 } from '../render/index.js';
 import { showPage, refreshSidebarSync } from './core.js';
+import { setHtml } from '../dom.js';
 
 export async function navigateToMonth(month: number): Promise<void> {
   state.currentMonth = month;
@@ -21,8 +22,7 @@ export async function navigateToMonth(month: number): Promise<void> {
       Planner.GetMonthSummaries(),
       Planner.GetYearStats(month),
     ]);
-    document.getElementById('month-content')!.innerHTML =
-      renderMonthPage(state.plan, month, events, stats, state.monthPerson);
+    setHtml('month-content', renderMonthPage(state.plan, month, events, stats, state.monthPerson));
     refreshSidebarSync(summaries);
     showPage('month');
   } catch (e) {
@@ -36,8 +36,7 @@ export async function showStatisticsPage(): Promise<void> {
       Planner.GetYearStats(state.statsMonth),
       Planner.GetPersonStats(state.statsMonth),
     ]);
-    document.getElementById('statistics-content')!.innerHTML =
-      renderStatisticsPage(state.plan, stats, personStats, state.statsMonth);
+    setHtml('statistics-content', renderStatisticsPage(state.plan, stats, personStats, state.statsMonth));
     showPage('statistics');
   } catch (e) {
     showToast('Fehler beim Laden: ' + e, 'error');
@@ -45,16 +44,14 @@ export async function showStatisticsPage(): Promise<void> {
 }
 
 export async function showSettingsPage(): Promise<void> {
-  document.getElementById('settings-content')!.innerHTML =
-    renderSettingsPage(state.plan, state.online, isAutosaveEnabled(), AUTOSAVE_DELAY_MS);
+  setHtml('settings-content', renderSettingsPage(state.plan, state.online, isAutosaveEnabled(), AUTOSAVE_DELAY_MS));
   showPage('settings');
 }
 
 export async function showVerlaufPage(): Promise<void> {
   try {
     const log = await Planner.GetActivityLog();
-    document.getElementById('verlauf-content')!.innerHTML =
-      renderVerlaufPage(state.plan, log, state.verlaufGroup);
+    setHtml('verlauf-content', renderVerlaufPage(state.plan, log, state.verlaufGroup));
     showPage('verlauf');
   } catch (e) {
     showToast('Fehler beim Laden: ' + e, 'error');
@@ -70,8 +67,7 @@ export async function showYearPage(): Promise<void> {
     ]);
     const closedCount = Object.values(state.plan?.months ?? {})
       .reduce((n, m) => n + (m.events || []).filter((e: any) => e.isClosed).length, 0);
-    document.getElementById('year-content')!.innerHTML =
-      renderYearPage(state.plan, summaries, yearStats, closedCount, personStats, state.yearPerson);
+    setHtml('year-content', renderYearPage(state.plan, summaries, yearStats, closedCount, personStats, state.yearPerson));
     showPage('year');
   } catch (e) {
     showToast('Fehler beim Laden: ' + e, 'error');

@@ -4,39 +4,44 @@ import { state } from '../state.js';
 import { showToast, showModal, closeModal } from '../ui.js';
 import { setDirtyUI } from './core.js';
 import { showSettingsPage } from './navigation.js';
+import { el, setText, val } from '../dom.js';
 
 let _timeEditIndex = -1;
 
 export function openAddTime(): void {
   _timeEditIndex = -1;
-  document.getElementById('modal-time-title')!.textContent = 'Standardzeit hinzufügen';
-  (document.getElementById('input-time-label') as HTMLInputElement).value    = '';
-  (document.getElementById('input-time-from') as HTMLInputElement).value     = '13:30';
-  (document.getElementById('input-time-to') as HTMLInputElement).value       = '17:30';
-  (document.getElementById('input-time-setup') as HTMLInputElement).value    = '';
-  (document.getElementById('input-time-teardown') as HTMLInputElement).value = '';
+  setText('modal-time-title', 'Standardzeit hinzufügen');
+  el<HTMLInputElement>('input-time-label')!.value    = '';
+  el<HTMLInputElement>('input-time-from')!.value     = '13:30';
+  el<HTMLInputElement>('input-time-to')!.value       = '17:30';
+  el<HTMLInputElement>('input-time-setup')!.value    = '';
+  el<HTMLInputElement>('input-time-teardown')!.value = '';
   showModal('modal-time');
 }
 
 export function openEditTime(index: number): void {
+  const plan = state.plan;
+  if (!plan) return;
   _timeEditIndex = index;
-  const t = state.plan.settings.defaultTimes[index] as TimePreset | undefined;
-  document.getElementById('modal-time-title')!.textContent = 'Standardzeit bearbeiten';
-  (document.getElementById('input-time-label') as HTMLInputElement).value    = t?.label        ?? '';
-  (document.getElementById('input-time-from') as HTMLInputElement).value     = t?.from         ?? '13:30';
-  (document.getElementById('input-time-to') as HTMLInputElement).value       = t?.to           ?? '17:30';
-  (document.getElementById('input-time-setup') as HTMLInputElement).value    = t?.timeSetup    ?? '';
-  (document.getElementById('input-time-teardown') as HTMLInputElement).value = t?.timeTeardown ?? '';
+  const t = plan.settings.defaultTimes[index] as TimePreset | undefined;
+  setText('modal-time-title', 'Standardzeit bearbeiten');
+  el<HTMLInputElement>('input-time-label')!.value    = t?.label        ?? '';
+  el<HTMLInputElement>('input-time-from')!.value     = t?.from         ?? '13:30';
+  el<HTMLInputElement>('input-time-to')!.value       = t?.to           ?? '17:30';
+  el<HTMLInputElement>('input-time-setup')!.value    = t?.timeSetup    ?? '';
+  el<HTMLInputElement>('input-time-teardown')!.value = t?.timeTeardown ?? '';
   showModal('modal-time');
 }
 
 export async function confirmTimeModal(): Promise<void> {
-  const label        = (document.getElementById('input-time-label') as HTMLInputElement).value.trim();
-  const from         = (document.getElementById('input-time-from') as HTMLInputElement).value;
-  const to           = (document.getElementById('input-time-to') as HTMLInputElement).value;
-  const timeSetup    = (document.getElementById('input-time-setup') as HTMLInputElement).value    || '';
-  const timeTeardown = (document.getElementById('input-time-teardown') as HTMLInputElement).value || '';
-  const times = [...(state.plan.settings.defaultTimes ?? [])];
+  const label        = val('input-time-label').trim();
+  const from         = val('input-time-from');
+  const to           = val('input-time-to');
+  const timeSetup    = val('input-time-setup');
+  const timeTeardown = val('input-time-teardown');
+  const plan = state.plan;
+  if (!plan) return;
+  const times = [...(plan.settings.defaultTimes ?? [])];
   const entry: TimePreset = {
     label: label || 'Standard',
     from,
@@ -46,7 +51,7 @@ export async function confirmTimeModal(): Promise<void> {
   };
   if (_timeEditIndex >= 0) times[_timeEditIndex] = entry;
   else times.push(entry);
-  const s = { ...state.plan.settings, defaultTimes: times };
+  const s = { ...plan.settings, defaultTimes: times };
   try {
     await Planner.UpdateSettings(s);
     state.plan = await Planner.GetPlan();
@@ -59,9 +64,11 @@ export async function confirmTimeModal(): Promise<void> {
 }
 
 export async function deleteTime(index: number): Promise<void> {
-  const times = [...(state.plan.settings.defaultTimes ?? [])];
+  const plan = state.plan;
+  if (!plan) return;
+  const times = [...(plan.settings.defaultTimes ?? [])];
   times.splice(index, 1);
-  const s = { ...state.plan.settings, defaultTimes: times };
+  const s = { ...plan.settings, defaultTimes: times };
   try {
     await Planner.UpdateSettings(s);
     state.plan = await Planner.GetPlan();

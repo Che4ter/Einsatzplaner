@@ -1238,6 +1238,15 @@ ul { list-style: none; }
   border-color: var(--teal);
   box-shadow: 0 0 0 3px rgba(15,110,99,0.15);
 }
+select.dlg-input, select.dlg-select, select.form-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 32px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  cursor: pointer;
+}
 .dlg-textarea, .form-textarea { resize: vertical; min-height: 64px; line-height: 1.5; }
 .form-label { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; display: block; }
 .form-group { margin-bottom: 14px; }
@@ -2668,21 +2677,3 @@ ul { list-style: none; }
   font-size: 12px; color: var(--muted); margin-top: 2px;
 }
 
-/* ── Cloud connect button & badge ─────────────────────────── */
-.cloud-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  font-weight: 700;
-  background: var(--green, #22c55e);
-  color: #fff;
-  border-radius: 99px;
-  padding: 1px 5px;
-  line-height: 1.4;
-  letter-spacing: 0.02em;
-}
-.sb-tool.cloud-online {
-  color: var(--green, #22c55e);
-  opacity: 1;
-}

@@ -1,6 +1,6 @@
 import { MONATE, esc } from '../utils.js';
 
-export function renderMonthNav(plan: any, summaries: any, currentMonth: number, currentPage: string): string {
+export function renderMonthNav(plan: any, summaries: any, currentMonth: number | null, currentPage: string): string {
   if (!plan) {
     return '<div style="padding:8px 16px;font-size:13px;color:var(--side-muted)">Keine Datei geöffnet</div>';
   }

@@ -40,17 +40,19 @@ service cloud.firestore {
                    && (!('year'    in request.resource.data) || request.resource.data.year is int);
     }
 
-    // Event documents: partial update allowed.
+    // Event documents: partial update allowed; delete requires only a valid room code.
     match /rooms/{roomCode}/plans/{year}/events/{eventId} {
       allow read: if isValidRoomCode(roomCode);
       // Validate that only expected fields are passed and nothing more:
-      allow write: if isValidRoomCode(roomCode)
+      allow create, update: if isValidRoomCode(roomCode)
                    && request.resource.data.keys().hasOnly(['month', 'id', 'type', 'date', 'dateEnd', 'isClosed', 'location', 'timeFrom', 'timeTo', 'timeSetup', 'timeTeardown', 'staffRequired', 'assignedStaff', 'comment'])
                    // Prevent heavy abusive string inserts:
                    && (!('comment'  in request.resource.data) || request.resource.data.comment.size()  < 2000)
                    && (!('location' in request.resource.data) || request.resource.data.location.size() < 300)
                    && (!('id'       in request.resource.data) || request.resource.data.id.size()       < 100)
                    && request.resource.data.assignedStaff.size() < 200;
+      // delete has no request.resource.data — validate only the room code.
+      allow delete: if isValidRoomCode(roomCode);
     }
 
     // Activity log: append-only, bounded entry size.

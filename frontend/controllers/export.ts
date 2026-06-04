@@ -2,6 +2,7 @@ import * as Planner from '../services.js';
 import { state } from '../state.js';
 import { MONATE, WEEKDAY_SHORT, esc, escNl, getMonth, paginateByHeight } from '../utils.js';
 import { showToast, showModal, closeModal } from '../ui.js';
+import { setText, setHtml } from '../dom.js';
 
 interface ExportState {
   tab: 'ical' | 'pdf' | 'json';
@@ -29,7 +30,7 @@ export function openExportModal(): void {
   const nextMonth = curMonth < 12 ? curMonth + 1 : 12;
   exportState.months = new Set([nextMonth]);
 
-  document.getElementById('export-head-sub')!.textContent = `Export · ${plan.year}`;
+  setText('export-head-sub', `Export · ${plan.year}`);
   renderExportModal();
   showModal('modal-export');
 }
@@ -82,8 +83,8 @@ export function renderExportModal(): void {
       </div>`;
 
     const filename = `einsatzplan-${year}.ics`;
-    document.getElementById('export-foot-filename')!.textContent = filename;
-    document.getElementById('btn-export-confirm')!.textContent = '↓ Kalender herunterladen';
+    setText('export-foot-filename', filename);
+    setText('btn-export-confirm', '↓ Kalender herunterladen');
   } else if (tab === 'pdf') {
     const now      = new Date();
     const curMonth = plan.year === now.getFullYear() ? now.getMonth() + 1 : null;
@@ -131,8 +132,8 @@ export function renderExportModal(): void {
       </div>`;
 
     const count = months.size;
-    document.getElementById('export-foot-filename')!.textContent = `einsatzplan-${year}.pdf · ${count} Seite${count !== 1 ? 'n' : ''}`;
-    document.getElementById('btn-export-confirm')!.textContent = '↓ PDF herunterladen';
+    setText('export-foot-filename', `einsatzplan-${year}.pdf · ${count} Seite${count !== 1 ? 'n' : ''}`);
+    setText('btn-export-confirm', '↓ PDF herunterladen');
   }
 
   if (tab === 'json') {
@@ -144,11 +145,11 @@ export function renderExportModal(): void {
           <p>Lädt die komplette Datendatei herunter — kompatibel mit dem lokalen Dateiformat.</p>
         </div>
       </div>`;
-    document.getElementById('export-foot-filename')!.textContent = `einsatzplan-${year}.json`;
-    document.getElementById('btn-export-confirm')!.textContent = '↓ JSON herunterladen';
+    setText('export-foot-filename', `einsatzplan-${year}.json`);
+    setText('btn-export-confirm', '↓ JSON herunterladen');
   }
 
-  document.getElementById('export-body')!.innerHTML = bodyHtml;
+  setHtml('export-body', bodyHtml);
 }
 
 export async function doExportICal(): Promise<void> {
@@ -317,7 +318,9 @@ export function doExportPDF(): void {
   idoc.close();
 }
 
-// ── exportState mutation helpers (used by the delegated click handler in app.js) ──
+export function getExportTab(): string { return exportState.tab; }
+
+// ── exportState mutation helpers (used by the delegated click handler in app.ts) ──
 
 export function setExportTab(tab: string): void {
   exportState.tab = tab as ExportState['tab'];

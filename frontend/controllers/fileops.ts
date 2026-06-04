@@ -4,9 +4,10 @@
 import * as Planner from '../services.js';
 import type { YearPlan } from '../services.js';
 import { state, setAutosavePaused } from '../state.js';
-import { showToast, showModal } from '../ui.js';
+import { showToast, showModal, showConfirm } from '../ui.js';
 import { esc } from '../utils.js';
-import { resetCloudWriteState } from '../sync/index.js';
+import { resetCloudWriteState, disconnectFromCloud } from '../sync/index.js';
+import { el, setText, setHtml, show, hide } from '../dom.js';
 import {
   setAutosaveLocal,
   handleSaveConflict,
@@ -14,6 +15,7 @@ import {
   hideExternalChangeBanner,
   showExternalChangeBanner,
   updateSidebarMeta,
+  showPage,
 } from './core.js';
 import {
   navigateToMonth,
@@ -36,20 +38,68 @@ export async function onPlanLoaded(plan: YearPlan): Promise<void> {
   resetCloudWriteState();
   state.plan = plan;
   updateSidebarMeta(plan);
-  document.getElementById('sb-filename')!.textContent = String(plan.year);
+  setText('sb-filename', String(plan.year));
   setDirtyUI(false);
   Planner.GetCurrentFileName().then(name => {
-    if (name && name !== '.') document.getElementById('sb-filename')!.textContent = name;
+    if (name && name !== '.') setText('sb-filename', name);
   }).catch(() => {});
 
   ['settings', 'statistics', 'verlauf', 'year'].forEach(p => {
-    const btn = document.getElementById(`nav-btn-${p}`) as HTMLButtonElement | null;
+    const btn = el<HTMLButtonElement>(`nav-btn-${p}`);
     if (btn) btn.disabled = false;
   });
+  show('btn-close');
 
   const now = new Date();
   const m = plan.year === now.getFullYear() ? now.getMonth() + 1 : 1;
   await navigateToMonth(m);
+}
+
+export async function cmdClose(): Promise<void> {
+  if (state.dirty) {
+    const ok = await showConfirm({
+      kicker: 'Datei schließen',
+      title: 'Ungespeicherte Änderungen',
+      message: 'Du hast ungespeicherte Änderungen. Trotzdem schließen?',
+      okLabel: 'Schließen',
+    });
+    if (!ok) return;
+  }
+
+  if (state.online) {
+    disconnectFromCloud();
+    try { await Planner.DisconnectCloud(); } catch { /* ignore */ }
+  }
+
+  resetCloudWriteState();
+  state.plan    = null;
+  state.dirty   = false;
+  state.online  = false;
+  state.cloudRoomCode = '';
+
+  setText('sidebar-team-name', 'Einsatzplan');
+  setText('sidebar-year-label', 'Kein Jahr geladen');
+  setText('sb-filename', '—');
+  document.title = 'Einsatzplan';
+
+  ['settings', 'statistics', 'verlauf', 'year'].forEach(p => {
+    const btn = el<HTMLButtonElement>(`nav-btn-${p}`);
+    if (btn) btn.disabled = true;
+  });
+  setHtml('nav-months', '<div style="padding: 8px 16px; font-size: 13px; color: var(--side-muted);">Keine Datei geöffnet</div>');
+
+  const pill  = el('save-state');
+  const label = el('save-state-label');
+  if (pill)  { pill.classList.remove('dirty', 'error', 'syncing'); }
+  if (label) label.textContent = 'Kein Dokument';
+
+  const btnSave = el<HTMLButtonElement>('btn-save');
+  if (btnSave) { btnSave.disabled = true; btnSave.style.display = ''; }
+
+  hideExternalChangeBanner();
+  hide('btn-close');
+  showPage('welcome');
+  tryRestoreLastFile();
 }
 
 export async function refreshCurrentPage(): Promise<void> {
@@ -116,8 +166,8 @@ export async function tryRestoreLastFile(): Promise<void> {
   try {
     const paths = await Planner.GetRecentPaths();
     if (!paths || paths.length === 0) return;
-    const list = document.getElementById('welcome-reopen-list');
-    const container = document.getElementById('welcome-reopen');
+    const list = el('welcome-reopen-list');
+    const container = el('welcome-reopen');
     if (!list || !container) return;
     list.innerHTML = '';
     for (const path of paths) {
